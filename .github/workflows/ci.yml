@@ -47,50 +47,7 @@ jobs:
         uses: LizardByte/actions/actions/release_setup@v2025.1028.23217
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-
-  build-docker:
-    name: Docker
-    needs: release-setup
-    permissions:
-      contents: read
-      packages: write
-    uses: LizardByte/.github/.github/workflows/__call-docker.yml@master
-    with:
-      maximize_build_space: true
-      publish_release: ${{ needs.release-setup.outputs.publish_release }}
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_tag: ${{ needs.release-setup.outputs.release_tag }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-    secrets:
-      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-      DOCKER_HUB_PASSWORD: ${{ secrets.DOCKER_HUB_PASSWORD }}
-      DOCKER_HUB_ACCESS_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-      GH_BOT_NAME: ${{ secrets.GH_BOT_NAME }}
-      GH_BOT_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-freebsd:
-    name: FreeBSD
-    needs: release-setup
-    uses: ./.github/workflows/ci-freebsd.yml
-    with:
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-
-  build-homebrew:
-    name: Homebrew
-    needs: release-setup
-    uses: ./.github/workflows/ci-homebrew.yml
-    with:
-      publish_release: ${{ needs.release-setup.outputs.publish_release }}
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_tag: ${{ needs.release-setup.outputs.release_tag }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-    secrets:
-      GH_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
-      GIT_EMAIL: ${{ secrets.GH_BOT_EMAIL }}
-      GIT_USERNAME: ${{ secrets.GH_BOT_NAME }}
-
+          
   build-linux:
     name: Linux
     needs: release-setup
@@ -118,15 +75,7 @@ jobs:
     with:
       release_commit: ${{ needs.release-setup.outputs.release_commit }}
       release_version: ${{ needs.release-setup.outputs.release_version }}
-
-  build-windows:
-    name: Windows
-    needs: release-setup
-    uses: ./.github/workflows/ci-windows.yml
-    with:
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-
+      
   bundle-analysis:
     name: Bundle Analysis
     needs: release-setup
@@ -141,38 +90,14 @@ jobs:
       !cancelled() &&
       startsWith(github.repository, 'LizardByte/')
     needs:
-      - build-freebsd
       - build-linux
       - build-linux-flatpak
-      - build-homebrew
-      - build-windows
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: FreeBSD-14.3-amd64
-            coverage: true
-            pr: true
-          - name: FreeBSD-14.3-aarch64
-            coverage: true
-            pr: false
           - name: Linux-AppImage
-            coverage: true
-            pr: true
-          - name: Homebrew-macos-14
-            coverage: false
-            pr: true
-          - name: Homebrew-macos-15
-            coverage: false
-            pr: true
-          - name: Homebrew-macos-26
-            coverage: false
-            pr: true
-          - name: Homebrew-ubuntu-latest
-            coverage: true
-            pr: true
-          - name: Windows-AMD64
             coverage: true
             pr: true
     steps:
@@ -227,12 +152,8 @@ jobs:
       startsWith(github.repository, 'LizardByte/')
     needs:
       - release-setup
-      - build-docker
-      - build-freebsd
       - build-linux
       - build-linux-flatpak
-      - build-homebrew
-      - build-windows
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts
