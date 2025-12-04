@@ -27,6 +27,7 @@ jobs:
 
   release-setup:
     name: Release Setup
+    if: github.event_name == 'push'
     outputs:
       publish_release: ${{ steps.release-setup.outputs.publish_release }}
       release_body: ${{ steps.release-setup.outputs.release_body }}
@@ -44,7 +45,6 @@ jobs:
       - name: Release Setup
         id: release-setup
         uses: LizardByte/actions/actions/release_setup@v2025.1028.23217
-
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
