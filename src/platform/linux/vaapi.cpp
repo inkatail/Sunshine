@@ -232,13 +232,11 @@ namespace va {
 void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
       auto va_profile = get_va_profile(ctx);
       if (va_profile == VAProfileNone || !is_va_profile_supported(va_profile)) {
-        // Don't bother doing anything if the profile isn't supported
         return;
       }
 
       auto va_entrypoint = select_va_entrypoint(va_profile);
       if (va_entrypoint == 0) {
-        // It's possible that only decoding is supported for this profile
         return;
       }
 
@@ -251,19 +249,15 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
         BOOST_LOG(info) << "Using normal encoding mode"sv;
       }
 
-      // -- START OF RATE CONTROL IMPLEMENTATION --
-
       VAConfigAttrib rc_attr = {VAConfigAttribRateControl};
       auto status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &rc_attr, 1);
       if (status != VA_STATUS_SUCCESS) {
-        // Stick to the default rate control (CQP) if querying fails
         rc_attr.value = 0;
       }
 
       VAConfigAttrib slice_attr = {VAConfigAttribEncMaxSlices};
       status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &slice_attr, 1);
       if (status != VA_STATUS_SUCCESS) {
-        // Assume only a single slice is supported
         slice_attr.value = 1;
       }
       if (ctx->slices > slice_attr.value) {
@@ -271,80 +265,65 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
         ctx->slices = slice_attr.value;
       }
 
-      // Determine RC Mode
-      using namespace config;
-      auto mode = video.vaapi.rc_mode;
-      bool strict_buffer = video.vaapi.strict_rc_buffer;
+      // --- Rate Control Logic ---
+      
+      // Read Config (0=Auto, 1=CQP, 2=VBR, 3=CBR)
+      int mode = config::video.vaapi.rc_mode;
+      bool strict_buffer = config::video.vaapi.strict_rc_buffer;
 
-      // Helper to set strict buffering (Low Latency VBV)
+      // Helper for strict VBV buffer (Low Latency)
       auto apply_strict_buffer = [&]() {
         ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
       };
 
-      // 1. CQP MODE
-      if (mode == video_t::vaapi_decl::rc_mode_e::cqp) {
+      // 1. CQP
+      if (mode == 1) {
         if (rc_attr.value & VA_RC_CQP) {
           BOOST_LOG(info) << "VA-API: Force-enabling CQP Mode"sv;
-          av_dict_set_int(options, "qp", video.qp, 0);
-          // CQP requires bitrate limits to be unset in some FFmpeg versions to function purely
+          av_dict_set_int(options, "qp", config::video.qp, 0);
           ctx->rc_max_rate = 0;
           ctx->rc_min_rate = 0;
           ctx->rc_buffer_size = 0;
           return;
         } else {
-          BOOST_LOG(warning) << "VA-API: CQP requested but not supported by hardware. Falling back to Auto."sv;
-          mode = video_t::vaapi_decl::rc_mode_e::auto_;
+          BOOST_LOG(warning) << "VA-API: CQP requested but not supported. Falling back to Auto."sv;
+          mode = 0; // Fallback to Auto
         }
       }
 
-      // 2. CBR MODE
-      if (mode == video_t::vaapi_decl::rc_mode_e::cbr) {
-        if (rc_attr.value & VA_RC_CBR) {
-          BOOST_LOG(info) << "VA-API: Force-enabling CBR Mode"sv;
-          av_dict_set(options, "rc_mode", "CBR", 0);
-          
-          ctx->rc_max_rate = ctx->bit_rate;
-          ctx->rc_min_rate = ctx->bit_rate;
-          
-          if (strict_buffer) apply_strict_buffer();
-          // Otherwise, FFmpeg default or video.cpp buffer calculation applies
-          return;
-        } else {
-          BOOST_LOG(warning) << "VA-API: CBR requested but not supported by hardware. Falling back to Auto."sv;
-          mode = video_t::vaapi_decl::rc_mode_e::auto_;
-        }
-      }
-
-      // 3. VBR MODE
-      if (mode == video_t::vaapi_decl::rc_mode_e::vbr) {
+      // 2. VBR
+      if (mode == 2) {
         if (rc_attr.value & VA_RC_VBR) {
           BOOST_LOG(info) << "VA-API: Force-enabling VBR Mode"sv;
           av_dict_set(options, "rc_mode", "VBR", 0);
-          
-          // In VBR, max_rate is the ceiling. min_rate is usually 0 or unset.
           ctx->rc_max_rate = ctx->bit_rate;
           ctx->rc_min_rate = 0;
-
-          if (strict_buffer) {
-             apply_strict_buffer();
-          } else {
-             // For standard VBR, we allow a larger buffer to handle complexity spikes
-             // unless overridden by global buffer settings.
-             // 2 seconds is a common VBR buffer window.
-             ctx->rc_buffer_size = ctx->bit_rate * 2;
-          }
+          if (strict_buffer) apply_strict_buffer();
+          else ctx->rc_buffer_size = ctx->bit_rate * 2; // Default VBR window
           return;
         } else {
-          BOOST_LOG(warning) << "VA-API: VBR requested but not supported by hardware. Falling back to Auto."sv;
-          mode = video_t::vaapi_decl::rc_mode_e::auto_;
+          BOOST_LOG(warning) << "VA-API: VBR requested but not supported. Falling back to Auto."sv;
+          mode = 0;
         }
       }
 
-      // 4. AUTO MODE (Heuristic Logic)
-      if (mode == video_t::vaapi_decl::rc_mode_e::auto_) {
-        // Use VBR with a single frame VBV when the user forces it (strict_rc_buffer) and for known good cases:
-        // - Intel GPUs
-        // - AV1
+      // 3. CBR
+      if (mode == 3) {
+        if (rc_attr.value & VA_RC_CBR) {
+          BOOST_LOG(info) << "VA-API: Force-enabling CBR Mode"sv;
+          av_dict_set(options, "rc_mode", "CBR", 0);
+          ctx->rc_max_rate = ctx->bit_rate;
+          ctx->rc_min_rate = ctx->bit_rate;
+          if (strict_buffer) apply_strict_buffer();
+          return;
+        } else {
+          BOOST_LOG(warning) << "VA-API: CBR requested but not supported. Falling back to Auto."sv;
+          mode = 0;
+        }
+      }
+
+      // 4. AUTO
+      if (mode == 0) {
         if (strict_buffer ||
             (vendor && strstr(vendor, "Intel")) ||
             ctx->codec_id == AV_CODEC_ID_AV1) {
@@ -352,95 +331,26 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
           apply_strict_buffer();
 
           if (rc_attr.value & VA_RC_VBR) {
-            BOOST_LOG(info) << "VA-API Auto: Using VBR with single frame VBV size"sv;
+            BOOST_LOG(info) << "VA-API Auto: Using VBR with single frame VBV"sv;
             av_dict_set(options, "rc_mode", "VBR", 0);
             ctx->rc_max_rate = ctx->bit_rate;
           } else if (rc_attr.value & VA_RC_CBR) {
-            BOOST_LOG(info) << "VA-API Auto: Using CBR with single frame VBV size"sv;
+            BOOST_LOG(info) << "VA-API Auto: Using CBR with single frame VBV"sv;
             av_dict_set(options, "rc_mode", "CBR", 0);
             ctx->rc_max_rate = ctx->bit_rate;
             ctx->rc_min_rate = ctx->bit_rate;
           } else {
-            BOOST_LOG(warning) << "VA-API Auto: Fallback to CQP with single frame VBV size"sv;
-            av_dict_set_int(options, "qp", video.qp, 0);
+            BOOST_LOG(warning) << "VA-API Auto: Fallback to CQP"sv;
+            av_dict_set_int(options, "qp", config::video.qp, 0);
           }
         } 
         else if (!(rc_attr.value & (VA_RC_CBR | VA_RC_VBR))) {
-          // Hardware supports neither CBR nor VBR
-          BOOST_LOG(warning) << "VA-API Auto: Hardware limits force CQP rate control"sv;
-          av_dict_set_int(options, "qp", video.qp, 0);
+          BOOST_LOG(warning) << "VA-API Auto: Hardware limits force CQP"sv;
+          av_dict_set_int(options, "qp", config::video.qp, 0);
         } 
         else {
-          BOOST_LOG(info) << "VA-API Auto: Using driver default rate control (usually CQP or VBR)"sv;
+          BOOST_LOG(info) << "VA-API Auto: Using driver default"sv;
         }
-      }
-      // -- END OF RATE CONTROL IMPLEMENTATION --
-    }
-
-      auto va_entrypoint = select_va_entrypoint(va_profile);
-      if (va_entrypoint == 0) {
-        // It's possible that only decoding is supported for this profile
-        return;
-      }
-
-      auto vendor = vaQueryVendorString(va_display);
-
-      if (va_entrypoint == VAEntrypointEncSliceLP) {
-        BOOST_LOG(info) << "Using LP encoding mode"sv;
-        av_dict_set_int(options, "low_power", 1, 0);
-      } else {
-        BOOST_LOG(info) << "Using normal encoding mode"sv;
-      }
-
-      VAConfigAttrib rc_attr = {VAConfigAttribRateControl};
-      auto status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &rc_attr, 1);
-      if (status != VA_STATUS_SUCCESS) {
-        // Stick to the default rate control (CQP)
-        rc_attr.value = 0;
-      }
-
-      VAConfigAttrib slice_attr = {VAConfigAttribEncMaxSlices};
-      status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &slice_attr, 1);
-      if (status != VA_STATUS_SUCCESS) {
-        // Assume only a single slice is supported
-        slice_attr.value = 1;
-      }
-      if (ctx->slices > slice_attr.value) {
-        BOOST_LOG(info) << "Limiting slice count to encoder maximum: "sv << slice_attr.value;
-        ctx->slices = slice_attr.value;
-      }
-
-      // Use VBR with a single frame VBV when the user forces it and for known good cases:
-      // - Intel GPUs
-      // - AV1
-      //
-      // VBR ensures the bitstream isn't full of filler data for bitrate undershoots and
-      // single frame VBV ensures that we don't have large bitrate overshoots (at least
-      // as much as they can be avoided without pre-analysis).
-      //
-      // When we have to resort to the default 1 second VBV for encoding quality reasons,
-      // we stick to CBR in order to avoid encoding huge frames after bitrate undershoots
-      // leave headroom available in the RC window.
-      if (config::video.vaapi.strict_rc_buffer ||
-          (vendor && strstr(vendor, "Intel")) ||
-          ctx->codec_id == AV_CODEC_ID_AV1) {
-        ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
-
-        if (rc_attr.value & VA_RC_VBR) {
-          BOOST_LOG(info) << "Using VBR with single frame VBV size"sv;
-          av_dict_set(options, "rc_mode", "VBR", 0);
-        } else if (rc_attr.value & VA_RC_CBR) {
-          BOOST_LOG(info) << "Using CBR with single frame VBV size"sv;
-          av_dict_set(options, "rc_mode", "CBR", 0);
-        } else {
-          BOOST_LOG(warning) << "Using CQP with single frame VBV size"sv;
-          av_dict_set_int(options, "qp", config::video.qp, 0);
-        }
-      } else if (!(rc_attr.value & (VA_RC_CBR | VA_RC_VBR))) {
-        BOOST_LOG(warning) << "Using CQP rate control"sv;
-        av_dict_set_int(options, "qp", config::video.qp, 0);
-      } else {
-        BOOST_LOG(info) << "Using default rate control"sv;
       }
     }
 
