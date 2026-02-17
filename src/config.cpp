@@ -48,6 +48,14 @@ using namespace std::literals;
 
 namespace config {
 
+// Helper to convert config string "cbr"/"vbr" to integer
+  int vaapi_rc_mode_from_view(const std::string_view &mode) {
+    if (mode == "cqp"sv) return 1;
+    if (mode == "vbr"sv) return 2;
+    if (mode == "cbr"sv) return 3;
+    return 0; // auto
+  }
+
   namespace nv {
 
     nvenc::nvenc_two_pass twopass_from_view(const std::string_view &preset) {
@@ -484,10 +492,7 @@ namespace config {
 
     {
       false,  // strict_rc_buffer
-    },  // vaapi
-
-    {
-      2,  // rc_mode, VBR by Default
+      0,      // rc_mode (0 = auto)
     },  // vaapi
 
     {},  // capture
@@ -1400,14 +1405,7 @@ namespace config {
 
       // Apply the config. Note: This will try to create any paths
       // referenced in the config, so we may receive exceptions if
-      // the path is incorrect or inaccessible.
-
-      video_t::vaapi_decl::rc_mode_e vaapi_rc_mode_from_view(const std::string_view &mode) {
-      if (mode == "cqp"sv) return video_t::vaapi_decl::rc_mode_e::cqp;
-      if (mode == "cbr"sv) return video_t::vaapi_decl::rc_mode_e::cbr;
-      if (mode == "vbr"sv) return video_t::vaapi_decl::rc_mode_e::vbr;
-      return video_t::vaapi_decl::rc_mode_e::auto_;
-    }
+      // the path is incorrect or inaccessible
       
       apply_config(std::move(vars));
       config_loaded = true;
