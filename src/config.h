@@ -80,6 +80,10 @@ namespace config {
       bool strict_rc_buffer;
     } vaapi;
 
+    struct {
+      int rc_mode;  // 0=auto, 1=cqp, 2=vbr, 3=cbr
+    } vaapi;
+
     std::string capture;
     std::string encoder;
     std::string adapter_name;
