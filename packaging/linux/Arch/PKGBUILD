@@ -6,10 +6,8 @@
 : "${_support_headless_testing:=false}"
 : "${_use_cuda:=detect}" # nvenc
 
-: "${_commit:=@GITHUB_COMMIT@}"
-
-pkgname='sunshine'
-pkgver=@PROJECT_VERSION@@SUNSHINE_SUB_VERSION@
+pkgname='sunshine-git'
+pkgver=0
 pkgrel=1
 pkgdesc="@PROJECT_DESCRIPTION@"
 arch=('x86_64' 'aarch64')
@@ -76,8 +74,16 @@ optdepends=(
 provides=()
 conflicts=()
 
-source=("$pkgname::git+@GITHUB_CLONE_URL@#commit=${_commit}")
+source=("$pkgname::git+https://github.com/inkatail/Sunshine.git#branch=master")
 sha256sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  printf "%s.r%s.g%s" \
+    "$(git describe --tags --abbrev=0 2>/dev/null || echo 0)" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short HEAD)"
+}
 
 # Options Handling
 if [[ "${_use_cuda::1}" == "d" ]] && pacman -Qi cuda &> /dev/null; then
@@ -115,9 +121,9 @@ prepare() {
 }
 
 build() {
-    export BRANCH="@GITHUB_BRANCH@"
-    export BUILD_VERSION="@BUILD_VERSION@"
-    export COMMIT="${_commit}"
+    export BRANCH="master"
+    export BUILD_VERSION="$(pkgver)"
+    export COMMIT="$(git -C "$pkgname" rev-parse HEAD)"
 
     export CC="gcc${_gcc_env_suffix}"
     export CXX="g++${_gcc_env_suffix}"
