@@ -78,10 +78,16 @@ namespace config {
 
     struct {
       bool strict_rc_buffer;
-    } vaapi;
-
-    struct {
-      int rc_mode;  // 0=auto, 1=cqp, 2=vbr, 3=cbr
+      
+      // -- CHANGE START --
+      enum class rc_mode_e : int {
+        auto_ = 0,
+        cqp,
+        vbr,
+        cbr
+      };
+      rc_mode_e rc_mode;
+      // -- CHANGE END --
     } vaapi;
 
     std::string capture;
