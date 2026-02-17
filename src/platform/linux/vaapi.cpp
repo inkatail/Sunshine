@@ -241,6 +241,9 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
       }
 
       auto vendor = vaQueryVendorString(va_display);
+      
+      // Detect AMD/Mesa driver
+      bool is_amd = vendor && (strstr(vendor, "Mesa") || strstr(vendor, "AMD"));
 
       if (va_entrypoint == VAEntrypointEncSliceLP) {
         BOOST_LOG(info) << "Using LP encoding mode"sv;
@@ -251,15 +254,12 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
 
       VAConfigAttrib rc_attr = {VAConfigAttribRateControl};
       auto status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &rc_attr, 1);
-      if (status != VA_STATUS_SUCCESS) {
-        rc_attr.value = 0;
-      }
+      if (status != VA_STATUS_SUCCESS) rc_attr.value = 0;
 
       VAConfigAttrib slice_attr = {VAConfigAttribEncMaxSlices};
       status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &slice_attr, 1);
-      if (status != VA_STATUS_SUCCESS) {
-        slice_attr.value = 1;
-      }
+      if (status != VA_STATUS_SUCCESS) slice_attr.value = 1;
+      
       if (ctx->slices > slice_attr.value) {
         BOOST_LOG(info) << "Limiting slice count to encoder maximum: "sv << slice_attr.value;
         ctx->slices = slice_attr.value;
@@ -267,13 +267,29 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
 
       // --- Rate Control Logic ---
       
-      // Read Config (0=Auto, 1=CQP, 2=VBR, 3=CBR)
-      int mode = config::video.vaapi.rc_mode;
+      int mode = config::video.vaapi.rc_mode; // 0=Auto, 1=CQP, 2=VBR, 3=CBR
       bool strict_buffer = config::video.vaapi.strict_rc_buffer;
 
-      // Helper for strict VBV buffer (Low Latency)
+      // Calculate Strict Buffer (1 Frame Size)
       auto apply_strict_buffer = [&]() {
         ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+      };
+
+      // CRITICAL FIX FOR AMD EXCURSIONS
+      auto apply_amd_stabilization = [&]() {
+        if (is_amd) {
+            // 1. Clamp QP. Prevents QP dropping to 0 on static screens (which causes spikes when motion starts)
+            // qmin 20 is safe for 1080p/4k. 
+            av_dict_set_int(options, "qmin", 20, 0); 
+            
+            // 2. Ensure Max QP isn't too restrictive
+            av_dict_set_int(options, "qmax", 51, 0);
+
+            // 3. Disable stuffing.
+            // Even if User selected CBR, we force MinRate to 0 on AMD.
+            // This prevents the driver from panicking/oscillating when displaying static images.
+            ctx->rc_min_rate = 0; 
+        }
       };
 
       // 1. CQP
@@ -286,8 +302,7 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
           ctx->rc_buffer_size = 0;
           return;
         } else {
-          BOOST_LOG(warning) << "VA-API: CQP requested but not supported. Falling back to Auto."sv;
-          mode = 0; // Fallback to Auto
+          mode = 0; // Fallback
         }
       }
 
@@ -298,12 +313,14 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
           av_dict_set(options, "rc_mode", "VBR", 0);
           ctx->rc_max_rate = ctx->bit_rate;
           ctx->rc_min_rate = 0;
+          
           if (strict_buffer) apply_strict_buffer();
-          else ctx->rc_buffer_size = ctx->bit_rate * 2; // Default VBR window
+          else ctx->rc_buffer_size = ctx->bit_rate * 2; 
+
+          apply_amd_stabilization();
           return;
         } else {
-          BOOST_LOG(warning) << "VA-API: VBR requested but not supported. Falling back to Auto."sv;
-          mode = 0;
+          mode = 0; // Fallback
         }
       }
 
@@ -312,13 +329,19 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
         if (rc_attr.value & VA_RC_CBR) {
           BOOST_LOG(info) << "VA-API: Force-enabling CBR Mode"sv;
           av_dict_set(options, "rc_mode", "CBR", 0);
+          
           ctx->rc_max_rate = ctx->bit_rate;
-          ctx->rc_min_rate = ctx->bit_rate;
+          
+          // Default CBR behavior: Min = Max (Constant)
+          ctx->rc_min_rate = ctx->bit_rate; 
+
           if (strict_buffer) apply_strict_buffer();
+
+          // On AMD, this function overrides rc_min_rate back to 0 to fix static excursions
+          apply_amd_stabilization(); 
           return;
         } else {
-          BOOST_LOG(warning) << "VA-API: CBR requested but not supported. Falling back to Auto."sv;
-          mode = 0;
+          mode = 0; // Fallback
         }
       }
 
@@ -331,21 +354,21 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
           apply_strict_buffer();
 
           if (rc_attr.value & VA_RC_VBR) {
-            BOOST_LOG(info) << "VA-API Auto: Using VBR with single frame VBV"sv;
+            BOOST_LOG(info) << "VA-API Auto: Using VBR"sv;
             av_dict_set(options, "rc_mode", "VBR", 0);
             ctx->rc_max_rate = ctx->bit_rate;
+            apply_amd_stabilization();
           } else if (rc_attr.value & VA_RC_CBR) {
-            BOOST_LOG(info) << "VA-API Auto: Using CBR with single frame VBV"sv;
+            BOOST_LOG(info) << "VA-API Auto: Using CBR"sv;
             av_dict_set(options, "rc_mode", "CBR", 0);
             ctx->rc_max_rate = ctx->bit_rate;
             ctx->rc_min_rate = ctx->bit_rate;
+            apply_amd_stabilization();
           } else {
-            BOOST_LOG(warning) << "VA-API Auto: Fallback to CQP"sv;
             av_dict_set_int(options, "qp", config::video.qp, 0);
           }
         } 
         else if (!(rc_attr.value & (VA_RC_CBR | VA_RC_VBR))) {
-          BOOST_LOG(warning) << "VA-API Auto: Hardware limits force CQP"sv;
           av_dict_set_int(options, "qp", config::video.qp, 0);
         } 
         else {
