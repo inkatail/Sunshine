@@ -2125,6 +2125,11 @@ editing the `conf` file in a text editor. Use the examples as reference.
             Force a specific encoder.
         </td>
     </tr>
+        <tr>
+        <td>vulkan</td>
+        <td>Use Vulkan encoder (AMD, Intel, NVIDIA).
+            @note{Applies to Linux only.}</td>
+    </tr>
     <tr>
         <td>Default</td>
         <td colspan="2">Sunshine will use the first encoder that is available.</td>
