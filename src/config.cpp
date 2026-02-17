@@ -1401,6 +1401,14 @@ namespace config {
       // Apply the config. Note: This will try to create any paths
       // referenced in the config, so we may receive exceptions if
       // the path is incorrect or inaccessible.
+
+      video_t::vaapi_decl::rc_mode_e vaapi_rc_mode_from_view(const std::string_view &mode) {
+      if (mode == "cqp"sv) return video_t::vaapi_decl::rc_mode_e::cqp;
+      if (mode == "cbr"sv) return video_t::vaapi_decl::rc_mode_e::cbr;
+      if (mode == "vbr"sv) return video_t::vaapi_decl::rc_mode_e::vbr;
+      return video_t::vaapi_decl::rc_mode_e::auto_;
+    }
+      
       apply_config(std::move(vars));
       config_loaded = true;
     } catch (const std::filesystem::filesystem_error &err) {
