@@ -270,25 +270,39 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
       int mode = config::video.vaapi.rc_mode; // 0=Auto, 1=CQP, 2=VBR, 3=CBR
       bool strict_buffer = config::video.vaapi.strict_rc_buffer;
 
-      // Calculate Strict Buffer (1 Frame Size)
-      auto apply_strict_buffer = [&]() {
-        ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+      // 1. Buffer Calculation
+      auto apply_buffer_settings = [&]() {
+        if (strict_buffer) {
+            if (is_amd) {
+                // FIX FOR DROPS UNDER LOAD:
+                // AMD VCN drivers struggle with 1-frame buffers when 3D load is high.
+                // We use a ~100ms buffer (bitrate / 10) instead.
+                // This absorbs render jitter without creating perceptible latency.
+                ctx->rc_buffer_size = ctx->bit_rate / 10;
+            } else {
+                // Intel/Nvidia handle true 1-frame buffers well
+                ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+            }
+        } else {
+            // Default loose buffer (usually 2 seconds)
+            ctx->rc_buffer_size = ctx->bit_rate * 2;
+        }
       };
 
-      // CRITICAL FIX FOR AMD EXCURSIONS
+      // 2. AMD Stabilization (Excursions & Drops)
       auto apply_amd_stabilization = [&]() {
         if (is_amd) {
-            // 1. Clamp QP. Prevents QP dropping to 0 on static screens (which causes spikes when motion starts)
-            // qmin 20 is safe for 1080p/4k. 
+            // A. Prevent bitrate spikes on static screens (Excursions)
             av_dict_set_int(options, "qmin", 20, 0); 
-            
-            // 2. Ensure Max QP isn't too restrictive
             av_dict_set_int(options, "qmax", 51, 0);
 
-            // 3. Disable stuffing.
-            // Even if User selected CBR, we force MinRate to 0 on AMD.
-            // This prevents the driver from panicking/oscillating when displaying static images.
+            // B. Disable stuffing (Excursions)
+            // Forces the driver to stop padding static frames with null data.
             ctx->rc_min_rate = 0; 
+
+            // C. Prevent Frame Drops (High Load)
+            // Forces driver to lower quality instead of skipping frames when buffer is tight.
+            av_dict_set_int(options, "frame_skip_threshold", 0, 0);
         }
       };
 
@@ -314,9 +328,7 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
           ctx->rc_max_rate = ctx->bit_rate;
           ctx->rc_min_rate = 0;
           
-          if (strict_buffer) apply_strict_buffer();
-          else ctx->rc_buffer_size = ctx->bit_rate * 2; 
-
+          apply_buffer_settings();
           apply_amd_stabilization();
           return;
         } else {
@@ -331,13 +343,11 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
           av_dict_set(options, "rc_mode", "CBR", 0);
           
           ctx->rc_max_rate = ctx->bit_rate;
-          
-          // Default CBR behavior: Min = Max (Constant)
+          // Default CBR sets min=max, but apply_amd_stabilization will override this to 0
+          // to prevent static screen stuffing/spikes.
           ctx->rc_min_rate = ctx->bit_rate; 
 
-          if (strict_buffer) apply_strict_buffer();
-
-          // On AMD, this function overrides rc_min_rate back to 0 to fix static excursions
+          apply_buffer_settings();
           apply_amd_stabilization(); 
           return;
         } else {
@@ -351,7 +361,7 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
             (vendor && strstr(vendor, "Intel")) ||
             ctx->codec_id == AV_CODEC_ID_AV1) {
           
-          apply_strict_buffer();
+          apply_buffer_settings();
 
           if (rc_attr.value & VA_RC_VBR) {
             BOOST_LOG(info) << "VA-API Auto: Using VBR"sv;
