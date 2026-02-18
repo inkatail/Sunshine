@@ -229,7 +229,7 @@ namespace va {
       return VAProfileNone;
     }
 
-void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
+    void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
       auto va_profile = get_va_profile(ctx);
       if (va_profile == VAProfileNone || !is_va_profile_supported(va_profile)) {
         return;
@@ -240,11 +240,9 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
         return;
       }
 
-      auto vendor = vaQueryVendorString(va_display);
-      
-      // Detect AMD/Mesa driver
-      bool is_amd = vendor && (strstr(vendor, "Mesa") || strstr(vendor, "AMD"));
-
+      // 1. Entrypoint Selection
+      // Some drivers (AMD Mesa) perform better under load with EncSlice (Normal) vs SliceLP (Low Power).
+      // We log which one is selected but let the selection logic handled in select_va_entrypoint do the work.
       if (va_entrypoint == VAEntrypointEncSliceLP) {
         BOOST_LOG(info) << "Using LP encoding mode"sv;
         av_dict_set_int(options, "low_power", 1, 0);
@@ -252,6 +250,12 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
         BOOST_LOG(info) << "Using normal encoding mode"sv;
       }
 
+      // 2. Async Depth
+      // Standard FFmpeg parameter to allow the driver to pipeline frames.
+      // Essential for preventing stalls when the GPU 3D engine is under high load.
+      av_dict_set_int(options, "async_depth", 4, 0);
+
+      // 3. Capability Querying
       VAConfigAttrib rc_attr = {VAConfigAttribRateControl};
       auto status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &rc_attr, 1);
       if (status != VA_STATUS_SUCCESS) rc_attr.value = 0;
@@ -259,120 +263,104 @@ void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
       VAConfigAttrib slice_attr = {VAConfigAttribEncMaxSlices};
       status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &slice_attr, 1);
       if (status != VA_STATUS_SUCCESS) slice_attr.value = 1;
-      
+
+      // Force 1 slice to minimize synchronization overhead
       if (ctx->slices > slice_attr.value) {
-        BOOST_LOG(info) << "Limiting slice count to encoder maximum: "sv << slice_attr.value;
         ctx->slices = slice_attr.value;
       }
 
-      // --- Rate Control Logic ---
-      
-      int mode = config::video.vaapi.rc_mode; // 0=Auto, 1=CQP, 2=VBR, 3=CBR
+      // 4. Rate Control Configuration
+      // Modes: 0=Auto, 1=CQP, 2=VBR, 3=CBR
+      int mode = config::video.vaapi.rc_mode;
       bool strict_buffer = config::video.vaapi.strict_rc_buffer;
 
-      // Calculate Strict Buffer (1 Frame Size)
-      auto apply_strict_buffer = [&]() {
-        ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
-      };
-
-      // CRITICAL FIX FOR AMD EXCURSIONS
-      auto apply_amd_stabilization = [&]() {
-        if (is_amd) {
-            // 1. Clamp QP. Prevents QP dropping to 0 on static screens (which causes spikes when motion starts)
-            // qmin 20 is safe for 1080p/4k. 
-            av_dict_set_int(options, "qmin", 20, 0); 
-            
-            // 2. Ensure Max QP isn't too restrictive
-            av_dict_set_int(options, "qmax", 51, 0);
-
-            // 3. Disable stuffing.
-            // Even if User selected CBR, we force MinRate to 0 on AMD.
-            // This prevents the driver from panicking/oscillating when displaying static images.
-            ctx->rc_min_rate = 0; 
+      // Helper: Calculate standard VBV Buffer
+      // Strict = 1 Frame (Low Latency). Loose = 2 Seconds (Standard).
+      auto set_buffer = [&](bool strict) {
+        if (strict) {
+          // Strictly 1 frame worth of bits
+          ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+        } else {
+          // Standard FFmpeg default (approx 1-2 seconds)
+          ctx->rc_buffer_size = ctx->bit_rate * 2;
         }
       };
 
-      // 1. CQP
+      // --- CQP (Constant Quantization Parameter) ---
       if (mode == 1) {
         if (rc_attr.value & VA_RC_CQP) {
-          BOOST_LOG(info) << "VA-API: Force-enabling CQP Mode"sv;
+          BOOST_LOG(info) << "VA-API: CQP Mode"sv;
           av_dict_set_int(options, "qp", config::video.qp, 0);
+
+          // Disable bitrate targeting completely
           ctx->rc_max_rate = 0;
           ctx->rc_min_rate = 0;
           ctx->rc_buffer_size = 0;
           return;
         } else {
-          mode = 0; // Fallback
+          BOOST_LOG(warning) << "VA-API: CQP not supported, falling back to Auto"sv;
+          mode = 0;
         }
       }
 
-      // 2. VBR
+      // --- VBR (Variable Bitrate) ---
       if (mode == 2) {
         if (rc_attr.value & VA_RC_VBR) {
-          BOOST_LOG(info) << "VA-API: Force-enabling VBR Mode"sv;
+          BOOST_LOG(info) << "VA-API: VBR Mode"sv;
           av_dict_set(options, "rc_mode", "VBR", 0);
+
+          // VBR: Cap at Bitrate, allow dropping to 0
           ctx->rc_max_rate = ctx->bit_rate;
           ctx->rc_min_rate = 0;
-          
-          if (strict_buffer) apply_strict_buffer();
-          else ctx->rc_buffer_size = ctx->bit_rate * 2; 
 
-          apply_amd_stabilization();
+          set_buffer(strict_buffer);
           return;
         } else {
-          mode = 0; // Fallback
+          BOOST_LOG(warning) << "VA-API: VBR not supported, falling back to Auto"sv;
+          mode = 0;
         }
       }
 
-      // 3. CBR
+      // --- CBR (Constant Bitrate) ---
       if (mode == 3) {
         if (rc_attr.value & VA_RC_CBR) {
-          BOOST_LOG(info) << "VA-API: Force-enabling CBR Mode"sv;
+          BOOST_LOG(info) << "VA-API: CBR Mode"sv;
           av_dict_set(options, "rc_mode", "CBR", 0);
-          
+
+          // True CBR: Min = Max = Target
+          // This forces the encoder to use padding/stuffing if the frame is small.
           ctx->rc_max_rate = ctx->bit_rate;
-          
-          // Default CBR behavior: Min = Max (Constant)
-          ctx->rc_min_rate = ctx->bit_rate; 
+          ctx->rc_min_rate = ctx->bit_rate;
 
-          if (strict_buffer) apply_strict_buffer();
-
-          // On AMD, this function overrides rc_min_rate back to 0 to fix static excursions
-          apply_amd_stabilization(); 
+          set_buffer(strict_buffer);
           return;
         } else {
-          mode = 0; // Fallback
+          BOOST_LOG(warning) << "VA-API: CBR not supported, falling back to Auto"sv;
+          mode = 0;
         }
       }
 
-      // 4. AUTO
+      // --- AUTO (Default) ---
       if (mode == 0) {
-        if (strict_buffer ||
-            (vendor && strstr(vendor, "Intel")) ||
-            ctx->codec_id == AV_CODEC_ID_AV1) {
-          
-          apply_strict_buffer();
-
-          if (rc_attr.value & VA_RC_VBR) {
-            BOOST_LOG(info) << "VA-API Auto: Using VBR"sv;
-            av_dict_set(options, "rc_mode", "VBR", 0);
-            ctx->rc_max_rate = ctx->bit_rate;
-            apply_amd_stabilization();
-          } else if (rc_attr.value & VA_RC_CBR) {
-            BOOST_LOG(info) << "VA-API Auto: Using CBR"sv;
-            av_dict_set(options, "rc_mode", "CBR", 0);
-            ctx->rc_max_rate = ctx->bit_rate;
-            ctx->rc_min_rate = ctx->bit_rate;
-            apply_amd_stabilization();
-          } else {
-            av_dict_set_int(options, "qp", config::video.qp, 0);
-          }
-        } 
-        else if (!(rc_attr.value & (VA_RC_CBR | VA_RC_VBR))) {
-          av_dict_set_int(options, "qp", config::video.qp, 0);
-        } 
+        // Prefer CBR for low-latency streaming if supported
+        if ((rc_attr.value & VA_RC_CBR) && strict_buffer) {
+          BOOST_LOG(info) << "VA-API Auto: Selected CBR"sv;
+          av_dict_set(options, "rc_mode", "CBR", 0);
+          ctx->rc_max_rate = ctx->bit_rate;
+          ctx->rc_min_rate = ctx->bit_rate;
+          set_buffer(true);
+        }
+        // Fallback to VBR
+        else if (rc_attr.value & VA_RC_VBR) {
+          BOOST_LOG(info) << "VA-API Auto: Selected VBR"sv;
+          av_dict_set(options, "rc_mode", "VBR", 0);
+          ctx->rc_max_rate = ctx->bit_rate;
+          set_buffer(strict_buffer);
+        }
+        // Fallback to CQP
         else {
-          BOOST_LOG(info) << "VA-API Auto: Using driver default"sv;
+          BOOST_LOG(info) << "VA-API Auto: Selected CQP"sv;
+          av_dict_set_int(options, "qp", config::video.qp, 0);
         }
       }
     }
