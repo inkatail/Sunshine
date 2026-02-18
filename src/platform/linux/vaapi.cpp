@@ -159,31 +159,12 @@ namespace va {
       }
       entrypoints.resize(num_eps);
 
-      auto vendor = vaQueryVendorString(va_display);
-      bool is_amd = vendor && (strstr(vendor, "Mesa") || strstr(vendor, "AMD"));
-
-      // FIX FOR FPS DROPS UNDER LOAD:
-      // AMD Mesa drivers struggle with "Low Power" (SliceLP) mode when the GPU 3D load is high.
-      // LP mode shares clocks/resources with the Display engine, which gets throttled.
-      // We force "Normal" (EncSlice) mode for AMD, which runs on the dedicated VCN block.
-      std::vector<VAEntrypoint> ep_preferences;
-
-      if (is_amd) {
-        // AMD: Prefer Normal -> LP
-        ep_preferences = {
-          VAEntrypointEncSlice,
-          VAEntrypointEncSliceLP,
-          VAEntrypointEncPicture
-        };
-      } else {
-        // Intel/Nvidia: Prefer LP -> Normal
-        ep_preferences = {
-          VAEntrypointEncSliceLP,
-          VAEntrypointEncSlice,
-          VAEntrypointEncPicture
-        };
-      }
-
+      // Sorted in order of descending preference
+      VAEntrypoint ep_preferences[] = {
+        VAEntrypointEncSliceLP,
+        VAEntrypointEncSlice,
+        VAEntrypointEncPicture
+      };
       for (auto ep_pref : ep_preferences) {
         if (std::find(entrypoints.begin(), entrypoints.end(), ep_pref) != entrypoints.end()) {
           return ep_pref;
@@ -248,7 +229,7 @@ namespace va {
       return VAProfileNone;
     }
 
-    void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
+void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
       auto va_profile = get_va_profile(ctx);
       if (va_profile == VAProfileNone || !is_va_profile_supported(va_profile)) {
         return;
@@ -260,6 +241,8 @@ namespace va {
       }
 
       auto vendor = vaQueryVendorString(va_display);
+      
+      // Detect AMD/Mesa driver
       bool is_amd = vendor && (strstr(vendor, "Mesa") || strstr(vendor, "AMD"));
 
       if (va_entrypoint == VAEntrypointEncSliceLP) {
@@ -269,9 +252,6 @@ namespace va {
         BOOST_LOG(info) << "Using normal encoding mode"sv;
       }
 
-      // FIX FOR STUTTER: Allow queuing frames while GPU is busy
-      av_dict_set_int(options, "async_depth", 4, 0);
-
       VAConfigAttrib rc_attr = {VAConfigAttribRateControl};
       auto status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &rc_attr, 1);
       if (status != VA_STATUS_SUCCESS) rc_attr.value = 0;
@@ -279,42 +259,36 @@ namespace va {
       VAConfigAttrib slice_attr = {VAConfigAttribEncMaxSlices};
       status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &slice_attr, 1);
       if (status != VA_STATUS_SUCCESS) slice_attr.value = 1;
-
-      // FIX FOR AMD SYNC: Force 1 slice.
-      // Multi-slice on AMD VCN introduces CPU synchronization overhead which causes
-      // the encoder thread to block when the system is under load.
-      if (is_amd) {
-        slice_attr.value = 1;
-      }
-
+      
       if (ctx->slices > slice_attr.value) {
         BOOST_LOG(info) << "Limiting slice count to encoder maximum: "sv << slice_attr.value;
         ctx->slices = slice_attr.value;
       }
 
       // --- Rate Control Logic ---
-      int mode = config::video.vaapi.rc_mode;
+      
+      int mode = config::video.vaapi.rc_mode; // 0=Auto, 1=CQP, 2=VBR, 3=CBR
       bool strict_buffer = config::video.vaapi.strict_rc_buffer;
 
-      auto apply_buffer_settings = [&]() {
-        if (strict_buffer) {
-          if (is_amd) {
-            // Buffer ~100ms to absorb high-load render jitter
-            ctx->rc_buffer_size = ctx->bit_rate / 10;
-          } else {
-            ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
-          }
-        } else {
-          ctx->rc_buffer_size = ctx->bit_rate * 2;
-        }
+      // Calculate Strict Buffer (1 Frame Size)
+      auto apply_strict_buffer = [&]() {
+        ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
       };
 
+      // CRITICAL FIX FOR AMD EXCURSIONS
       auto apply_amd_stabilization = [&]() {
         if (is_amd) {
-          av_dict_set_int(options, "qmin", 20, 0);
-          av_dict_set_int(options, "qmax", 51, 0);
-          ctx->rc_min_rate = 0;
-          av_dict_set_int(options, "frame_skip_threshold", 0, 0);
+            // 1. Clamp QP. Prevents QP dropping to 0 on static screens (which causes spikes when motion starts)
+            // qmin 20 is safe for 1080p/4k. 
+            av_dict_set_int(options, "qmin", 20, 0); 
+            
+            // 2. Ensure Max QP isn't too restrictive
+            av_dict_set_int(options, "qmax", 51, 0);
+
+            // 3. Disable stuffing.
+            // Even if User selected CBR, we force MinRate to 0 on AMD.
+            // This prevents the driver from panicking/oscillating when displaying static images.
+            ctx->rc_min_rate = 0; 
         }
       };
 
@@ -339,7 +313,10 @@ namespace va {
           av_dict_set(options, "rc_mode", "VBR", 0);
           ctx->rc_max_rate = ctx->bit_rate;
           ctx->rc_min_rate = 0;
-          apply_buffer_settings();
+          
+          if (strict_buffer) apply_strict_buffer();
+          else ctx->rc_buffer_size = ctx->bit_rate * 2; 
+
           apply_amd_stabilization();
           return;
         } else {
@@ -352,11 +329,16 @@ namespace va {
         if (rc_attr.value & VA_RC_CBR) {
           BOOST_LOG(info) << "VA-API: Force-enabling CBR Mode"sv;
           av_dict_set(options, "rc_mode", "CBR", 0);
-          // Allow 5% headroom for catch-up bursts
-          ctx->rc_max_rate = (int)(ctx->bit_rate * 1.05);
-          ctx->rc_min_rate = ctx->bit_rate;
-          apply_buffer_settings();
-          apply_amd_stabilization();
+          
+          ctx->rc_max_rate = ctx->bit_rate;
+          
+          // Default CBR behavior: Min = Max (Constant)
+          ctx->rc_min_rate = ctx->bit_rate; 
+
+          if (strict_buffer) apply_strict_buffer();
+
+          // On AMD, this function overrides rc_min_rate back to 0 to fix static excursions
+          apply_amd_stabilization(); 
           return;
         } else {
           mode = 0; // Fallback
@@ -366,32 +348,32 @@ namespace va {
       // 4. AUTO
       if (mode == 0) {
         if (strict_buffer ||
-          (vendor && strstr(vendor, "Intel")) ||
-          ctx->codec_id == AV_CODEC_ID_AV1) {
+            (vendor && strstr(vendor, "Intel")) ||
+            ctx->codec_id == AV_CODEC_ID_AV1) {
+          
+          apply_strict_buffer();
 
-          apply_buffer_settings();
-
-        if (rc_attr.value & VA_RC_VBR) {
-          BOOST_LOG(info) << "VA-API Auto: Using VBR"sv;
-          av_dict_set(options, "rc_mode", "VBR", 0);
-          ctx->rc_max_rate = ctx->bit_rate;
-          apply_amd_stabilization();
-        } else if (rc_attr.value & VA_RC_CBR) {
-          BOOST_LOG(info) << "VA-API Auto: Using CBR"sv;
-          av_dict_set(options, "rc_mode", "CBR", 0);
-          ctx->rc_max_rate = (int)(ctx->bit_rate * 1.05);
-          ctx->rc_min_rate = ctx->bit_rate;
-          apply_amd_stabilization();
-        } else {
-          av_dict_set_int(options, "qp", config::video.qp, 0);
-        }
-          }
-          else if (!(rc_attr.value & (VA_RC_CBR | VA_RC_VBR))) {
+          if (rc_attr.value & VA_RC_VBR) {
+            BOOST_LOG(info) << "VA-API Auto: Using VBR"sv;
+            av_dict_set(options, "rc_mode", "VBR", 0);
+            ctx->rc_max_rate = ctx->bit_rate;
+            apply_amd_stabilization();
+          } else if (rc_attr.value & VA_RC_CBR) {
+            BOOST_LOG(info) << "VA-API Auto: Using CBR"sv;
+            av_dict_set(options, "rc_mode", "CBR", 0);
+            ctx->rc_max_rate = ctx->bit_rate;
+            ctx->rc_min_rate = ctx->bit_rate;
+            apply_amd_stabilization();
+          } else {
             av_dict_set_int(options, "qp", config::video.qp, 0);
           }
-          else {
-            BOOST_LOG(info) << "VA-API Auto: Using driver default"sv;
-          }
+        } 
+        else if (!(rc_attr.value & (VA_RC_CBR | VA_RC_VBR))) {
+          av_dict_set_int(options, "qp", config::video.qp, 0);
+        } 
+        else {
+          BOOST_LOG(info) << "VA-API Auto: Using driver default"sv;
+        }
       }
     }
 
