@@ -240,9 +240,10 @@ namespace va {
         return;
       }
 
-      // 1. Entrypoint Selection
-      // Some drivers (AMD Mesa) perform better under load with EncSlice (Normal) vs SliceLP (Low Power).
-      // We log which one is selected but let the selection logic handled in select_va_entrypoint do the work.
+      // Detect AMD/Mesa driver for specific tuning
+      auto vendor = vaQueryVendorString(va_display);
+      bool is_amd = vendor && (strstr(vendor, "Mesa") || strstr(vendor, "AMD"));
+
       if (va_entrypoint == VAEntrypointEncSliceLP) {
         BOOST_LOG(info) << "Using LP encoding mode"sv;
         av_dict_set_int(options, "low_power", 1, 0);
@@ -250,12 +251,7 @@ namespace va {
         BOOST_LOG(info) << "Using normal encoding mode"sv;
       }
 
-      // 2. Async Depth
-      // Standard FFmpeg parameter to allow the driver to pipeline frames.
-      // Essential for preventing stalls when the GPU 3D engine is under high load.
-      av_dict_set_int(options, "async_depth", 4, 0);
-
-      // 3. Capability Querying
+      // Standard Capability Checks
       VAConfigAttrib rc_attr = {VAConfigAttribRateControl};
       auto status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &rc_attr, 1);
       if (status != VA_STATUS_SUCCESS) rc_attr.value = 0;
@@ -264,98 +260,101 @@ namespace va {
       status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &slice_attr, 1);
       if (status != VA_STATUS_SUCCESS) slice_attr.value = 1;
 
-      // Force 1 slice to minimize synchronization overhead
+      // Force single slice to minimize overhead and compatibility issues
       if (ctx->slices > slice_attr.value) {
         ctx->slices = slice_attr.value;
       }
 
-      // 4. Rate Control Configuration
-      // Modes: 0=Auto, 1=CQP, 2=VBR, 3=CBR
-      int mode = config::video.vaapi.rc_mode;
+      // --- Rate Control Logic ---
+
+      int mode = config::video.vaapi.rc_mode; // 0=Auto, 1=CQP, 2=VBR, 3=CBR
       bool strict_buffer = config::video.vaapi.strict_rc_buffer;
 
-      // Helper: Calculate standard VBV Buffer
-      // Strict = 1 Frame (Low Latency). Loose = 2 Seconds (Standard).
-      auto set_buffer = [&](bool strict) {
-        if (strict) {
-          // Strictly 1 frame worth of bits
+      // Standard Buffer Calculation
+      auto apply_buffer = [&]() {
+        if (strict_buffer) {
+          // Strict 1-frame buffer (Low Latency)
           ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
         } else {
-          // Standard FFmpeg default (approx 1-2 seconds)
+          // Standard 2-second buffer
           ctx->rc_buffer_size = ctx->bit_rate * 2;
         }
       };
 
-      // --- CQP (Constant Quantization Parameter) ---
+      // Standard Quality Clamping (The real fix for AMD excursions)
+      // This prevents the encoder from idling at QP 0 during static scenes.
+      auto apply_quality_bounds = [&]() {
+        if (is_amd) {
+          // QMIN 20 prevents the "Static Scene" -> "Motion" bitrate spike
+          av_dict_set_int(options, "qmin", 20, 0);
+          av_dict_set_int(options, "qmax", 51, 0);
+        }
+      };
+
+      // 1. CQP (Constant Quality)
       if (mode == 1) {
         if (rc_attr.value & VA_RC_CQP) {
           BOOST_LOG(info) << "VA-API: CQP Mode"sv;
           av_dict_set_int(options, "qp", config::video.qp, 0);
-
-          // Disable bitrate targeting completely
           ctx->rc_max_rate = 0;
           ctx->rc_min_rate = 0;
           ctx->rc_buffer_size = 0;
           return;
-        } else {
-          BOOST_LOG(warning) << "VA-API: CQP not supported, falling back to Auto"sv;
-          mode = 0;
         }
+        // Fallback to Auto if not supported
+        mode = 0;
       }
 
-      // --- VBR (Variable Bitrate) ---
+      // 2. VBR (Variable Bitrate)
       if (mode == 2) {
         if (rc_attr.value & VA_RC_VBR) {
           BOOST_LOG(info) << "VA-API: VBR Mode"sv;
           av_dict_set(options, "rc_mode", "VBR", 0);
 
-          // VBR: Cap at Bitrate, allow dropping to 0
           ctx->rc_max_rate = ctx->bit_rate;
-          ctx->rc_min_rate = 0;
+          ctx->rc_min_rate = 0; // VBR allows dropping to 0
 
-          set_buffer(strict_buffer);
+          apply_buffer();
+          apply_quality_bounds();
           return;
-        } else {
-          BOOST_LOG(warning) << "VA-API: VBR not supported, falling back to Auto"sv;
-          mode = 0;
         }
+        mode = 0;
       }
 
-      // --- CBR (Constant Bitrate) ---
+      // 3. CBR (Constant Bitrate)
       if (mode == 3) {
         if (rc_attr.value & VA_RC_CBR) {
           BOOST_LOG(info) << "VA-API: CBR Mode"sv;
           av_dict_set(options, "rc_mode", "CBR", 0);
 
-          // True CBR: Min = Max = Target
-          // This forces the encoder to use padding/stuffing if the frame is small.
           ctx->rc_max_rate = ctx->bit_rate;
-          ctx->rc_min_rate = ctx->bit_rate;
+          ctx->rc_min_rate = ctx->bit_rate; // True CBR
 
-          set_buffer(strict_buffer);
+          apply_buffer();
+          apply_quality_bounds();
           return;
-        } else {
-          BOOST_LOG(warning) << "VA-API: CBR not supported, falling back to Auto"sv;
-          mode = 0;
         }
+        mode = 0;
       }
 
-      // --- AUTO (Default) ---
+      // 4. AUTO (Heuristic)
       if (mode == 0) {
-        // Prefer CBR for low-latency streaming if supported
+        // Prefer CBR for Strict/Low-Latency scenarios
         if ((rc_attr.value & VA_RC_CBR) && strict_buffer) {
           BOOST_LOG(info) << "VA-API Auto: Selected CBR"sv;
           av_dict_set(options, "rc_mode", "CBR", 0);
           ctx->rc_max_rate = ctx->bit_rate;
           ctx->rc_min_rate = ctx->bit_rate;
-          set_buffer(true);
+          apply_buffer();
+          apply_quality_bounds();
         }
         // Fallback to VBR
         else if (rc_attr.value & VA_RC_VBR) {
           BOOST_LOG(info) << "VA-API Auto: Selected VBR"sv;
           av_dict_set(options, "rc_mode", "VBR", 0);
           ctx->rc_max_rate = ctx->bit_rate;
-          set_buffer(strict_buffer);
+          apply_buffer();
+          apply_quality_bounds();
         }
         // Fallback to CQP
         else {
