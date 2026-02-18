@@ -1,7 +1,6 @@
 <script setup>
 import { ref } from 'vue'
 import Checkbox from "../../../Checkbox.vue";
-import Select from "../../../Select.vue";
 
 const props = defineProps([
   'platform',
@@ -13,18 +12,17 @@ const config = ref(props.config)
 
 <template>
   <div id="vaapi-encoder" class="config-page">
-    <!-- RC Mode -->
-    <Select class="mb-3"
-            id="vaapi_rc_mode"
-            locale-prefix="config"
-            v-model="config.vaapi_rc_mode"
-            :options="[
-                { value: 'auto', label: 'vaapi_rc_mode_auto' },
-                { value: 'cqp', label: 'vaapi_rc_mode_cqp' },
-                { value: 'vbr', label: 'vaapi_rc_mode_vbr' },
-                { value: 'cbr', label: 'vaapi_rc_mode_cbr' }
-            ]"
-    ></Select>
+    <!-- Rate Control Mode -->
+    <div class="mb-3">
+      <label for="vaapi_rc_mode" class="form-label">{{ $t('config.vaapi_rc_mode') }}</label>
+      <select id="vaapi_rc_mode" class="form-select" v-model="config.vaapi_rc_mode">
+        <option value="auto">{{ $t('config.vaapi_rc_mode_auto') }}</option>
+        <option value="cqp">{{ $t('config.vaapi_rc_mode_cqp') }}</option>
+        <option value="cbr">{{ $t('config.vaapi_rc_mode_cbr') }}</option>
+        <option value="vbr">{{ $t('config.vaapi_rc_mode_vbr') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.vaapi_rc_mode_desc') }}</div>
+    </div>
 
     <!-- Strict RC Buffer -->
     <Checkbox class="mb-3"
