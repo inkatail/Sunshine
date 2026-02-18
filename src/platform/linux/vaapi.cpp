@@ -251,6 +251,14 @@ namespace va {
         BOOST_LOG(info) << "Using normal encoding mode"sv;
       }
 
+      // --- HIGH LOAD GAMING FIX ---
+      // Since your GPU uses EncSlice (Normal), the FPS drag is caused by
+      // strict synchronization with the 3D render queue.
+      // Setting async_depth to 4 allows the driver to queue multiple frames,
+      // preventing the encoder thread from stalling when the GPU is 99% busy.
+      // This mimics Windows AMF behavior.
+      av_dict_set_int(options, "async_depth", 4, 0);
+
       // Standard Capability Checks
       VAConfigAttrib rc_attr = {VAConfigAttribRateControl};
       auto status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &rc_attr, 1);
