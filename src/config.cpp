@@ -493,6 +493,7 @@ namespace config {
     {
       false,  // strict_rc_buffer
       0,      // rc_mode (0 = auto)
+      1,  // async_depth
     },  // vaapi
 
     {},  // capture
@@ -1124,6 +1125,7 @@ namespace config {
     int_f(vars, "vt_realtime", video.vt.vt_realtime, vt::rt_from_view);
 
     bool_f(vars, "vaapi_strict_rc_buffer", video.vaapi.strict_rc_buffer);
+    int_f(vars, "vaapi_async_depth", video.vaapi.async_depth);;
     generic_f(vars, "vaapi_rc_mode", video.vaapi.rc_mode, vaapi_rc_mode_from_view);
     
     string_f(vars, "capture", video.capture);

@@ -78,7 +78,8 @@ namespace config {
 
     struct {
       bool strict_rc_buffer;
-      int rc_mode; // 0=auto, 1=cqp, 2=vbr, 3=cbr
+      int async_depth;
+      int rc_mode;
     } vaapi;
 
     std::string capture;
