@@ -484,7 +484,7 @@ namespace config {
 
     {
       false,  // strict_rc_buffer
-      1,      // async_depth
+      1,  // async_depth
     },  // vaapi
 
     {},  // capture
