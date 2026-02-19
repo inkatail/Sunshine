@@ -12,6 +12,14 @@ const config = ref(props.config)
 
 <template>
   <div id="vaapi-encoder" class="config-page">
+    <!-- Strict RC Buffer -->
+    <Checkbox class="mb-3"
+              id="vaapi_strict_rc_buffer"
+              locale-prefix="config"
+              v-model="config.vaapi_strict_rc_buffer"
+              default="false"
+    ></Checkbox>
+
     <!-- Async Depth -->
     <div class="mb-3">
       <label for="vaapi_async_depth" class="form-label">{{ $t('config.vaapi_async_depth') }}</label>
@@ -21,13 +29,6 @@ const config = ref(props.config)
         {{ $t('config.vaapi_async_depth_desc') }}
       </div>
     </div>
-    <!-- Strict RC Buffer -->
-    <Checkbox class="mb-3"
-              id="vaapi_strict_rc_buffer"
-              locale-prefix="config"
-              v-model="config.vaapi_strict_rc_buffer"
-              default="false"
-    ></Checkbox>
   </div>
 </template>
 
