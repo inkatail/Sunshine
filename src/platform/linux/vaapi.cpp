@@ -232,17 +232,17 @@ namespace va {
     void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
       auto va_profile = get_va_profile(ctx);
       if (va_profile == VAProfileNone || !is_va_profile_supported(va_profile)) {
+        // Don't bother doing anything if the profile isn't supported
         return;
       }
 
       auto va_entrypoint = select_va_entrypoint(va_profile);
       if (va_entrypoint == 0) {
+        // It's possible that only decoding is supported for this profile
         return;
       }
 
-      // Detect AMD/Mesa driver for specific tuning
       auto vendor = vaQueryVendorString(va_display);
-      bool is_amd = vendor && (strstr(vendor, "Mesa") || strstr(vendor, "AMD"));
 
       if (va_entrypoint == VAEntrypointEncSliceLP) {
         BOOST_LOG(info) << "Using LP encoding mode"sv;
@@ -253,129 +253,57 @@ namespace va {
 
       av_dict_set_int(options, "async_depth", config::video.vaapi.async_depth, 0);
 
-      // Standard Capability Checks
       VAConfigAttrib rc_attr = {VAConfigAttribRateControl};
       auto status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &rc_attr, 1);
-      if (status != VA_STATUS_SUCCESS) rc_attr.value = 0;
+      if (status != VA_STATUS_SUCCESS) {
+        // Stick to the default rate control (CQP)
+        rc_attr.value = 0;
+      }
 
       VAConfigAttrib slice_attr = {VAConfigAttribEncMaxSlices};
       status = vaGetConfigAttributes(va_display, va_profile, va_entrypoint, &slice_attr, 1);
-      if (status != VA_STATUS_SUCCESS) slice_attr.value = 1;
-
-      // Force single slice to minimize overhead and compatibility issues
+      if (status != VA_STATUS_SUCCESS) {
+        // Assume only a single slice is supported
+        slice_attr.value = 1;
+      }
       if (ctx->slices > slice_attr.value) {
+        BOOST_LOG(info) << "Limiting slice count to encoder maximum: "sv << slice_attr.value;
         ctx->slices = slice_attr.value;
       }
 
-      // --- Rate Control Logic ---
+      // Use VBR with a single frame VBV when the user forces it and for known good cases:
+      // - Intel GPUs
+      // - AV1
+      //
+      // VBR ensures the bitstream isn't full of filler data for bitrate undershoots and
+      // single frame VBV ensures that we don't have large bitrate overshoots (at least
+      // as much as they can be avoided without pre-analysis).
+      //
+      // When we have to resort to the default 1 second VBV for encoding quality reasons,
+      // we stick to CBR in order to avoid encoding huge frames after bitrate undershoots
+      // leave headroom available in the RC window.
+      if (config::video.vaapi.strict_rc_buffer ||
+        (vendor && strstr(vendor, "Intel")) ||
+        ctx->codec_id == AV_CODEC_ID_AV1) {
+        ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
 
-      int mode = config::video.vaapi.rc_mode; // 0=Auto, 1=CQP, 2=VBR, 3=CBR
-      bool strict_buffer = config::video.vaapi.strict_rc_buffer;
-
-      // Standard Buffer Calculation
-      auto apply_buffer = [&]() {
-        if (strict_buffer) {
-          // Strict 1-frame buffer (Low Latency)
-          ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+      if (rc_attr.value & VA_RC_VBR) {
+        BOOST_LOG(info) << "Using VBR with single frame VBV size"sv;
+        av_dict_set(options, "rc_mode", "VBR", 0);
+      } else if (rc_attr.value & VA_RC_CBR) {
+        BOOST_LOG(info) << "Using CBR with single frame VBV size"sv;
+        av_dict_set(options, "rc_mode", "CBR", 0);
+      } else {
+        BOOST_LOG(warning) << "Using CQP with single frame VBV size"sv;
+        av_dict_set_int(options, "qp", config::video.qp, 0);
+      }
+        } else if (!(rc_attr.value & (VA_RC_CBR | VA_RC_VBR))) {
+          BOOST_LOG(warning) << "Using CQP rate control"sv;
+          av_dict_set_int(options, "qp", config::video.qp, 0);
         } else {
-          // Standard 2-second buffer
-          ctx->rc_buffer_size = ctx->bit_rate * 2;
+          BOOST_LOG(info) << "Using default rate control"sv;
         }
-      };
-
-      // Standard Quality Clamping (The real fix for AMD excursions)
-      // This prevents the encoder from idling at QP 0 during static scenes.
-      auto apply_quality_bounds = [&]() {
-        if (is_amd) {
-          // QMIN 20 prevents the "Static Scene" -> "Motion" bitrate spike
-          av_dict_set_int(options, "qmin", 20, 0);
-          av_dict_set_int(options, "qmax", 51, 0);
-        }
-      };
-
-      // 1. CQP (Constant Quality)
-      if (mode == 1) {
-        if (rc_attr.value & VA_RC_CQP) {
-          BOOST_LOG(info) << "VA-API: CQP Mode"sv;
-          av_dict_set_int(options, "qp", config::video.qp, 0);
-          ctx->rc_max_rate = 0;
-          ctx->rc_min_rate = 0;
-          ctx->rc_buffer_size = 0;
-          return;
-        }
-        // Fallback to Auto if not supported
-        mode = 0;
-      }
-
-      // 2. VBR (Variable Bitrate)
-      if (mode == 2) {
-        if (rc_attr.value & VA_RC_VBR) {
-          BOOST_LOG(info) << "VA-API: VBR Mode"sv;
-          av_dict_set(options, "rc_mode", "VBR", 0);
-
-          ctx->rc_max_rate = ctx->bit_rate;
-          ctx->rc_min_rate = 0; // VBR allows dropping to 0
-
-          apply_buffer();
-          apply_quality_bounds();
-          return;
-        }
-        mode = 0;
-      }
-
-      // 3. CBR (Constant Bitrate)
-      if (mode == 3) {
-        if (rc_attr.value & VA_RC_CBR) {
-          BOOST_LOG(info) << "VA-API: CBR Mode"sv;
-          av_dict_set(options, "rc_mode", "CBR", 0);
-
-          ctx->rc_max_rate = ctx->bit_rate;
-          ctx->rc_min_rate = ctx->bit_rate;
-
-          apply_buffer();
-          apply_quality_bounds();
-          return;
-        }
-        mode = 0;
-      }
-
-      // 4. AUTO (Heuristic)
-      if (mode == 0) {
-        // Prefer CBR for Strict/Low-Latency scenarios
-        if ((rc_attr.value & VA_RC_CBR) && strict_buffer) {
-          BOOST_LOG(info) << "VA-API Auto: Selected CBR"sv;
-          av_dict_set(options, "rc_mode", "CBR", 0);
-          ctx->rc_max_rate = ctx->bit_rate;
-          ctx->rc_min_rate = ctx->bit_rate;
-          apply_buffer();
-          apply_quality_bounds();
-        }
-        // Fallback to VBR
-        else if (rc_attr.value & VA_RC_VBR) {
-          BOOST_LOG(info) << "VA-API Auto: Selected VBR"sv;
-          av_dict_set(options, "rc_mode", "VBR", 0);
-          ctx->rc_max_rate = ctx->bit_rate;
-          apply_buffer();
-          apply_quality_bounds();
-        }
-        // Fallback to CQP
-        else {
-          BOOST_LOG(info) << "VA-API Auto: Selected CQP"sv;
-          av_dict_set_int(options, "qp", config::video.qp, 0);
-        }
-      }
     }
-
-    int set_frame(AVFrame *frame, AVBufferRef *hw_frames_ctx_buf) override {
-      this->hwframe.reset(frame);
-      this->frame = frame;
-
-      if (!frame->buf[0]) {
-        if (av_hwframe_get_buffer(hw_frames_ctx_buf, frame, 0)) {
-          BOOST_LOG(error) << "Couldn't get hwframe for VAAPI"sv;
-          return -1;
-        }
-      }
 
       va::DRMPRIMESurfaceDescriptor prime;
       va::VASurfaceID surface = (std::uintptr_t) frame->data[3];
