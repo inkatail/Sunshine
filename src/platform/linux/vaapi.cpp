@@ -9,33 +9,33 @@
 #include <string>
 
 extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavutil/pixdesc.h>
-#include <va/va.h>
-#include <va/va_drm.h>
-#if !VA_CHECK_VERSION(1, 9, 0)
+  #include <libavcodec/avcodec.h>
+  #include <libavutil/pixdesc.h>
+  #include <va/va.h>
+  #include <va/va_drm.h>
+  #if !VA_CHECK_VERSION(1, 9, 0)
   // vaSyncBuffer stub allows Sunshine built against libva <2.9.0 to link against ffmpeg on libva 2.9.0 or later
   VAStatus
-    vaSyncBuffer(
-      VADisplay dpy,
-      VABufferID buf_id,
-      uint64_t timeout_ns
-    ) {
+  vaSyncBuffer(
+    VADisplay dpy,
+    VABufferID buf_id,
+    uint64_t timeout_ns
+  ) {
     return VA_STATUS_ERROR_UNIMPLEMENTED;
   }
-#endif
-#if !VA_CHECK_VERSION(1, 21, 0)
+  #endif
+  #if !VA_CHECK_VERSION(1, 21, 0)
   // vaMapBuffer2 stub allows Sunshine built against libva <2.21.0 to link against ffmpeg on libva 2.21.0 or later
   VAStatus
-    vaMapBuffer2(
-      VADisplay dpy,
-      VABufferID buf_id,
-      void **pbuf,
-      uint32_t flags
-    ) {
+  vaMapBuffer2(
+    VADisplay dpy,
+    VABufferID buf_id,
+    void **pbuf,
+    uint32_t flags
+  ) {
     return vaMapBuffer(dpy, buf_id, pbuf);
   }
-#endif
+  #endif
 }
 
 // local includes
@@ -211,10 +211,10 @@ namespace va {
                 return VAProfileHEVCMain444;
             }
             break;
-          case AV_PROFILE_HEVC_MAIN_10:
-            return VAProfileHEVCMain10;
-          case AV_PROFILE_HEVC_MAIN:
-            return VAProfileHEVCMain;
+              case AV_PROFILE_HEVC_MAIN_10:
+                return VAProfileHEVCMain10;
+              case AV_PROFILE_HEVC_MAIN:
+                return VAProfileHEVCMain;
         }
       } else if (ctx->codec_id == AV_CODEC_ID_AV1) {
         switch (ctx->profile) {
@@ -304,6 +304,17 @@ namespace va {
           BOOST_LOG(info) << "Using default rate control"sv;
         }
     }
+
+    int set_frame(AVFrame *frame, AVBufferRef *hw_frames_ctx_buf) override {
+      this->hwframe.reset(frame);
+      this->frame = frame;
+
+      if (!frame->buf[0]) {
+        if (av_hwframe_get_buffer(hw_frames_ctx_buf, frame, 0)) {
+          BOOST_LOG(error) << "Couldn't get hwframe for VAAPI"sv;
+          return -1;
+        }
+      }
 
       va::DRMPRIMESurfaceDescriptor prime;
       va::VASurfaceID surface = (std::uintptr_t) frame->data[3];
