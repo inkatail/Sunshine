@@ -2866,6 +2866,42 @@ editing the `conf` file in a text editor. Use the examples as reference.
 
 ## VA-API Encoder
 
+### vaapi_rc_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The rate control mode to use for VA-API encoding.
+            @note{This option only applies when using VA-API [encoder](#encoder).}
+            @attention{If the selected rate control mode is not supported by your hardware, automatic selection will be used instead.}
+        </td>
+    </tr>
+    <tr>
+        <td>Choices</td>
+        <td colspan="2">
+            @code{}
+            auto
+            cbr
+            vbr
+            cqp
+            @endcode
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            auto
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vaapi_rc_mode = vbr
+            @endcode</td>
+    </tr>
+</table>
+
 ### vaapi_strict_rc_buffer
 
 <table>
@@ -2887,6 +2923,166 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             vaapi_strict_rc_buffer = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### vaapi_qp_min
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Sets the minimum QP (Quantization Parameter) value to prevent extremely high quality frames that cause
+            bitrate spikes. This is particularly useful for AMD GPUs which are known to have bitrate excursions
+            during scene changes.
+            @note{This option only applies when using VA-API [encoder](#encoder).}
+            @attention{Recommended value for AMD GPUs: 18-22. Leave unset to use encoder default.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            (unset - encoder default)
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">@code{}
+            0-51
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vaapi_qp_min = 18
+            @endcode</td>
+    </tr>
+</table>
+
+### vaapi_qp_max
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Sets the maximum QP (Quantization Parameter) value to ensure a minimum quality threshold.
+            @note{This option only applies when using VA-API [encoder](#encoder).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            (unset - encoder default)
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">@code{}
+            0-51
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vaapi_qp_max = 51
+            @endcode</td>
+    </tr>
+</table>
+
+### vaapi_enforce_hrd
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Enables Hypothetical Reference Decoder (HRD) compliance for stricter bitrate control. This may help
+            reduce bitrate spikes on AMD GPUs but can cause quality variations during high-complexity scenes.
+            @note{This option only applies when using VA-API [encoder](#encoder).}
+            @attention{This is an experimental mitigation for AMD VA-API bitrate excursion issues and may not
+            fully resolve the problem due to hardware limitations.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vaapi_enforce_hrd = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### vaapi_async_depth
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Number of frames to process asynchronously. Higher values allow more frames to be in-flight,
+            which can improve framerate stability when the GPU is under heavy load from games. However,
+            higher values also increase encoding latency.
+            @note{This option only applies when using VA-API [encoder](#encoder).}
+            @tip{If your stream framerate is significantly lower than your game FPS (e.g., game runs at 80 FPS
+            but stream shows 40 FPS), try increasing this value to 4-8.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">1-64</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vaapi_async_depth = 4
+            @endcode</td>
+    </tr>
+</table>
+
+### vaapi_low_power_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Controls whether to use the dedicated low-power encoder hardware when available. Low-power mode
+            uses a separate encoding engine that reduces GPU contention with 3D workloads, potentially
+            improving stream framerate stability under heavy GPU load.
+            @note{This option only applies when using VA-API [encoder](#encoder).}
+            @note{Not all GPUs support low-power encoding. Intel GPUs generally have good LP support.
+            AMD GPUs may have limited or no LP mode support depending on the generation.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            auto
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Options</td>
+        <td colspan="2">
+            @code{}
+            auto     - automatically detect best mode based on hardware capabilities
+            enabled  - force low power encoding mode (may fail if not supported)
+            disabled - force normal encoding mode
+            @endcode
+        </td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vaapi_low_power_mode = enabled
             @endcode</td>
     </tr>
 </table>

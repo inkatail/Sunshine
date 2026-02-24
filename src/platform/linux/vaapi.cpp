@@ -244,7 +244,23 @@ namespace va {
 
       auto vendor = vaQueryVendorString(va_display);
 
-      if (va_entrypoint == VAEntrypointEncSliceLP) {
+      // Set async depth to improve framerate stability under GPU load.
+      // Higher values allow more frames to be in-flight, reducing stalls when the GPU is busy.
+      if (config::video.vaapi.async_depth > 0) {
+        BOOST_LOG(info) << "Setting VA-API async_depth to "sv << config::video.vaapi.async_depth;
+        av_dict_set_int(options, "async_depth", config::video.vaapi.async_depth, 0);
+      }
+
+      // Handle low power mode (uses dedicated encoder hardware when available)
+      auto &low_power_mode = config::video.vaapi.low_power_mode;
+      if (low_power_mode == "enabled") {
+        BOOST_LOG(info) << "Using LP encoding mode (user forced)"sv;
+        av_dict_set_int(options, "low_power", 1, 0);
+      } else if (low_power_mode == "disabled") {
+        BOOST_LOG(info) << "Using normal encoding mode (user forced)"sv;
+        av_dict_set_int(options, "low_power", 0, 0);
+      } else if (va_entrypoint == VAEntrypointEncSliceLP) {
+        // Auto mode: use LP if detected as best entrypoint
         BOOST_LOG(info) << "Using LP encoding mode"sv;
         av_dict_set_int(options, "low_power", 1, 0);
       } else {
@@ -269,37 +285,123 @@ namespace va {
         ctx->slices = slice_attr.value;
       }
 
-      // Use VBR with a single frame VBV when the user forces it and for known good cases:
-      // - Intel GPUs
-      // - AV1
-      //
-      // VBR ensures the bitstream isn't full of filler data for bitrate undershoots and
-      // single frame VBV ensures that we don't have large bitrate overshoots (at least
-      // as much as they can be avoided without pre-analysis).
-      //
-      // When we have to resort to the default 1 second VBV for encoding quality reasons,
-      // we stick to CBR in order to avoid encoding huge frames after bitrate undershoots
-      // leave headroom available in the RC window.
-      if (config::video.vaapi.strict_rc_buffer ||
-          (vendor && strstr(vendor, "Intel")) ||
-          ctx->codec_id == AV_CODEC_ID_AV1) {
-        ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
-
-        if (rc_attr.value & VA_RC_VBR) {
-          BOOST_LOG(info) << "Using VBR with single frame VBV size"sv;
-          av_dict_set(options, "rc_mode", "VBR", 0);
-        } else if (rc_attr.value & VA_RC_CBR) {
-          BOOST_LOG(info) << "Using CBR with single frame VBV size"sv;
-          av_dict_set(options, "rc_mode", "CBR", 0);
-        } else {
-          BOOST_LOG(warning) << "Using CQP with single frame VBV size"sv;
+      // Check if user has manually specified a rate control mode
+      auto &user_rc_mode = config::video.vaapi.rc_mode;
+      bool use_auto_selection = user_rc_mode.empty() || user_rc_mode == "auto";
+      
+      if (!use_auto_selection) {
+        // User has specified a specific RC mode
+        if (user_rc_mode == "cbr") {
+          if (rc_attr.value & VA_RC_CBR) {
+            BOOST_LOG(info) << "Using CBR rate control (user specified)"sv;
+            av_dict_set(options, "rc_mode", "CBR", 0);
+            ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+          } else {
+            BOOST_LOG(warning) << "CBR rate control not supported, falling back to automatic selection"sv;
+            use_auto_selection = true;
+          }
+        } else if (user_rc_mode == "vbr") {
+          if (rc_attr.value & VA_RC_VBR) {
+            BOOST_LOG(info) << "Using VBR rate control (user specified)"sv;
+            av_dict_set(options, "rc_mode", "VBR", 0);
+            ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+          } else {
+            BOOST_LOG(warning) << "VBR rate control not supported, falling back to automatic selection"sv;
+            use_auto_selection = true;
+          }
+        } else if (user_rc_mode == "cqp") {
+          BOOST_LOG(info) << "Using CQP rate control (user specified)"sv;
           av_dict_set_int(options, "qp", config::video.qp, 0);
+        } else {
+          BOOST_LOG(warning) << "Unknown rate control mode: "sv << user_rc_mode << ", falling back to automatic selection"sv;
+          use_auto_selection = true;
         }
-      } else if (!(rc_attr.value & (VA_RC_CBR | VA_RC_VBR))) {
-        BOOST_LOG(warning) << "Using CQP rate control"sv;
-        av_dict_set_int(options, "qp", config::video.qp, 0);
-      } else {
-        BOOST_LOG(info) << "Using default rate control"sv;
+      }
+
+      // If user didn't specify a valid RC mode or fallback is needed, use automatic selection
+      if (use_auto_selection) {
+        // Use VBR with a single frame VBV when the user forces it and for known good cases:
+        // - Intel GPUs
+        // - AV1
+        //
+        // VBR ensures the bitstream isn't full of filler data for bitrate undershoots and
+        // single frame VBV ensures that we don't have large bitrate overshoots (at least
+        // as much as they can be avoided without pre-analysis).
+        //
+        // When we have to resort to the default 1 second VBV for encoding quality reasons,
+        // we stick to CBR in order to avoid encoding huge frames after bitrate undershoots
+        // leave headroom available in the RC window.
+        if (config::video.vaapi.strict_rc_buffer ||
+            (vendor && strstr(vendor, "Intel")) ||
+            ctx->codec_id == AV_CODEC_ID_AV1) {
+          ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+
+          if (rc_attr.value & VA_RC_VBR) {
+            BOOST_LOG(info) << "Using VBR with single frame VBV size"sv;
+            av_dict_set(options, "rc_mode", "VBR", 0);
+          } else if (rc_attr.value & VA_RC_CBR) {
+            BOOST_LOG(info) << "Using CBR with single frame VBV size"sv;
+            av_dict_set(options, "rc_mode", "CBR", 0);
+          } else {
+            BOOST_LOG(warning) << "Using CQP with single frame VBV size"sv;
+            av_dict_set_int(options, "qp", config::video.qp, 0);
+          }
+        } else if (!(rc_attr.value & (VA_RC_CBR | VA_RC_VBR))) {
+          BOOST_LOG(warning) << "Using CQP rate control"sv;
+          av_dict_set_int(options, "qp", config::video.qp, 0);
+        } else {
+          BOOST_LOG(info) << "Using default rate control"sv;
+        }
+      }
+
+      // Apply AMD-specific bitrate control mitigations
+      // AMD VA-API encoders are known to have bitrate excursions during scene changes.
+      // These settings help mitigate the issue but cannot fully eliminate it due to
+      // hardware limitations.
+      bool is_amd = vendor && (strstr(vendor, "AMD") || strstr(vendor, "Radeon"));
+      
+      if (is_amd) {
+        // Apply QP bounds to limit bitrate spikes during scene changes
+        // Lower qp_min prevents extremely low QP values that cause huge frame sizes
+        if (config::video.vaapi.qp_min.has_value()) {
+          BOOST_LOG(info) << "Setting VAAPI qp_min to "sv << config::video.vaapi.qp_min.value() << " (AMD bitrate mitigation)"sv;
+          ctx->qmin = config::video.vaapi.qp_min.value();
+        }
+        
+        // qp_max ensures minimum quality threshold
+        if (config::video.vaapi.qp_max.has_value()) {
+          BOOST_LOG(info) << "Setting VAAPI qp_max to "sv << config::video.vaapi.qp_max.value() << " (AMD bitrate mitigation)"sv;
+          ctx->qmax = config::video.vaapi.qp_max.value();
+        }
+        
+        // Enforce HRD compliance for stricter bitrate adherence
+        if (config::video.vaapi.enforce_hrd) {
+          BOOST_LOG(info) << "Enabling HRD enforcement (AMD bitrate mitigation)"sv;
+          av_dict_set_int(options, "aud", 1, 0);
+          // Set stricter buffer constraints
+          if (ctx->rc_buffer_size == 0) {
+            // Use 2-frame VBV buffer for AMD if not already set
+            ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num * 2;
+          }
+          ctx->rc_max_rate = ctx->bit_rate;
+        }
+      }
+      
+      // Apply QP bounds even for non-AMD if explicitly configured
+      if (!is_amd) {
+        if (config::video.vaapi.qp_min.has_value()) {
+          BOOST_LOG(info) << "Setting VAAPI qp_min to "sv << config::video.vaapi.qp_min.value();
+          ctx->qmin = config::video.vaapi.qp_min.value();
+        }
+        if (config::video.vaapi.qp_max.has_value()) {
+          BOOST_LOG(info) << "Setting VAAPI qp_max to "sv << config::video.vaapi.qp_max.value();
+          ctx->qmax = config::video.vaapi.qp_max.value();
+        }
+        if (config::video.vaapi.enforce_hrd) {
+          BOOST_LOG(info) << "Enabling HRD enforcement"sv;
+          av_dict_set_int(options, "aud", 1, 0);
+          ctx->rc_max_rate = ctx->bit_rate;
+        }
       }
     }
 
@@ -529,7 +631,7 @@ namespace va {
     va->va_display = display.get();
 
     vaSetErrorCallback(display.get(), __log, &error);
-    vaSetErrorCallback(display.get(), __log, &info);
+    vaSetInfoCallback(display.get(), __log, &info);
 
     int major, minor;
     auto status = vaInitialize(display.get(), &major, &minor);

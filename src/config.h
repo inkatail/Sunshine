@@ -78,6 +78,12 @@ namespace config {
 
     struct {
       bool strict_rc_buffer;
+      std::string rc_mode;  // Rate control mode: auto, cbr, vbr, cqp
+      std::optional<int> qp_min;  // Minimum QP to limit bitrate spikes (AMD mitigation)
+      std::optional<int> qp_max;  // Maximum QP to ensure minimum quality
+      bool enforce_hrd;  // Enforce HRD compliance for strict bitrate control
+      int async_depth;  // Number of frames to process asynchronously (improves framerate under GPU load)
+      std::string low_power_mode;  // Force low power encoding mode: auto, enabled, disabled
     } vaapi;
 
     std::string capture;

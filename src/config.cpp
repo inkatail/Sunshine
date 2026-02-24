@@ -484,6 +484,12 @@ namespace config {
 
     {
       false,  // strict_rc_buffer
+      "auto",  // rc_mode
+      std::nullopt,  // qp_min
+      std::nullopt,  // qp_max
+      false,  // enforce_hrd
+      1,  // async_depth
+      "auto",  // low_power_mode
     },  // vaapi
 
     {},  // capture
@@ -1115,6 +1121,24 @@ namespace config {
     int_f(vars, "vt_realtime", video.vt.vt_realtime, vt::rt_from_view);
 
     bool_f(vars, "vaapi_strict_rc_buffer", video.vaapi.strict_rc_buffer);
+    string_f(vars, "vaapi_rc_mode", video.vaapi.rc_mode);
+    {
+      int value = -1;
+      int_between_f(vars, "vaapi_qp_min", value, {0, 51});
+      if (value >= 0) {
+        video.vaapi.qp_min = value;
+      }
+    }
+    {
+      int value = -1;
+      int_between_f(vars, "vaapi_qp_max", value, {0, 51});
+      if (value >= 0) {
+        video.vaapi.qp_max = value;
+      }
+    }
+    bool_f(vars, "vaapi_enforce_hrd", video.vaapi.enforce_hrd);
+    int_between_f(vars, "vaapi_async_depth", video.vaapi.async_depth, {1, 64});
+    string_f(vars, "vaapi_low_power_mode", video.vaapi.low_power_mode);
 
     string_f(vars, "capture", video.capture);
     string_f(vars, "encoder", video.encoder);
