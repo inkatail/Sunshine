@@ -1116,7 +1116,7 @@ namespace config {
     int_f(vars, "vt_realtime", video.vt.vt_realtime, vt::rt_from_view);
 
     bool_f(vars, "vaapi_strict_rc_buffer", video.vaapi.strict_rc_buffer);
-    int_f(vars, "vaapi_async_depth", video.vaapi.async_depth);;
+    int_f(vars, "vaapi_async_depth", video.vaapi.async_depth);
 
     string_f(vars, "capture", video.capture);
     string_f(vars, "encoder", video.encoder);
