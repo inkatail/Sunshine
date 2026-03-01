@@ -268,9 +268,14 @@ namespace platf {
 
   // Dimensions for touchscreen input
   struct touch_port_t {
-    int offset_x, offset_y;
-    int width, height;
-    int logical_width, logical_height;
+    int offset_x;
+    int offset_y;
+
+    int height;
+    int width;
+
+    int logical_height;
+    int logical_width;
   };
 
   // These values must match Limelight-internal.h's SS_FF_* constants!
@@ -534,12 +539,20 @@ namespace platf {
     virtual ~display_t() = default;
 
     // Offsets for when streaming a specific monitor. By default, they are 0.
-    int offset_x, offset_y;
-    int env_width, env_height;
-    int env_logical_width, env_logical_height;
+    int offset_x;
+    int offset_y;
 
-    int width, height;
-    int logical_width, logical_height;
+    int env_height;
+    int env_width;
+
+    int env_logical_height;
+    int env_logical_width;
+
+    int height;
+    int width;
+
+    int logical_height;
+    int logical_width;
 
   protected:
     // collect capture timing data (at loglevel debug)
@@ -834,8 +847,8 @@ namespace platf {
    */
   platform_caps::caps_t get_capabilities();
 
-#define SERVICE_NAME "Sunshine"
-#define SERVICE_TYPE "_nvstream._tcp"
+  constexpr auto SERVICE_NAME = "Sunshine";
+  constexpr auto SERVICE_TYPE = "_nvstream._tcp";
 
   namespace publish {
     [[nodiscard]] std::unique_ptr<deinit_t> start();

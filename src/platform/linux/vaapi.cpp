@@ -500,7 +500,8 @@ namespace va {
     egl::sws_t sws;
     egl::nv12_t nv12;
 
-    int width, height;
+    int height;
+    int width;
   };
 
   class va_ram_t: public va_t {
@@ -557,7 +558,8 @@ namespace va {
     std::uint64_t sequence;
     egl::rgb_t rgb;
 
-    int offset_x, offset_y;
+    int offset_x;
+    int offset_y;
   };
 
   /**
@@ -633,7 +635,8 @@ namespace va {
     vaSetErrorCallback(display.get(), __log, &error);
     vaSetInfoCallback(display.get(), __log, &info);
 
-    int major, minor;
+    int major;
+    int minor;
     auto status = vaInitialize(display.get(), &major, &minor);
     if (status) {
       BOOST_LOG(error) << "Couldn't initialize va display: "sv << vaErrorStr(status);
@@ -697,7 +700,8 @@ namespace va {
       return false;
     }
 
-    int major, minor;
+    int major;
+    int minor;
     auto status = vaInitialize(display.get(), &major, &minor);
     if (status) {
       BOOST_LOG(error) << "Couldn't initialize va display: "sv << vaErrorStr(status);
