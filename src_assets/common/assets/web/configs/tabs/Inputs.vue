@@ -31,12 +31,14 @@ const config = ref(props.config)
           <template #freebsd>
             <option value="switch">{{ $t("config.gamepad_switch") }}</option>
             <option value="xone">{{ $t("config.gamepad_xone") }}</option>
+            <option value="xseries">{{ $t("config.gamepad_xseries") }}</option>
           </template>
 
           <template #linux>
             <option value="ds5">{{ $t("config.gamepad_ds5") }}</option>
             <option value="switch">{{ $t("config.gamepad_switch") }}</option>
             <option value="xone">{{ $t("config.gamepad_xone") }}</option>
+            <option value="xseries">{{ $t("config.gamepad_xseries") }}</option>
           </template>
 
           <template #windows>

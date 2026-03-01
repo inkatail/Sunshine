@@ -229,6 +229,7 @@
     "gamepad_manual": "手動 DS4 選項",
     "gamepad_x360": "X360 (Xbox 360)",
     "gamepad_xone": "XOne (Xbox One)",
+    "gamepad_xseries": "XSeries (Xbox Series S|X)",
     "global_prep_cmd": "指令準備",
     "global_prep_cmd_desc": "設定在執行任何應用程式之前或之後執行的指令清單。如果任何指定的準備指令失敗，應用程式的啟動程序將會中止。",
     "hevc_mode": "HEVC 支援",

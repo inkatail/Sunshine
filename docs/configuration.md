@@ -332,7 +332,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="6">Choices</td>
+        <td rowspan="7">Choices</td>
         <td>ds4</td>
         <td>DualShock 4 controller (PS4)
             @note{This option applies to Windows only.}</td>
@@ -355,6 +355,11 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>xone</td>
         <td>Xbox One controller
+            @note{This option applies to FreeBSD and Linux only.}</td>
+    </tr>
+    <tr>
+        <td>xseries</td>
+        <td>Xbox Series S|X controller
             @note{This option applies to FreeBSD and Linux only.}</td>
     </tr>
 </table>

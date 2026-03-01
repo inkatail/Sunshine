@@ -229,6 +229,7 @@
     "gamepad_manual": "Các tùy chọn DS4 thủ công",
     "gamepad_x360": "X360 (Xbox 360)",
     "gamepad_xone": "XOne (Xbox One)",
+    "gamepad_xseries": "XSeries (Xbox Series S|X)",
     "global_prep_cmd": "Chuẩn bị lệnh",
     "global_prep_cmd_desc": "Cấu hình danh sách các lệnh cần thực thi trước hoặc sau khi chạy bất kỳ ứng dụng nào. Nếu bất kỳ lệnh chuẩn bị nào trong danh sách bị thất bại, quá trình khởi chạy ứng dụng sẽ bị hủy bỏ.",
     "hevc_mode": "Hỗ trợ HEVC",

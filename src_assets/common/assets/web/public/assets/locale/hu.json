@@ -229,6 +229,7 @@
     "gamepad_manual": "Kézi DS4-beállítások",
     "gamepad_x360": "X360 (Xbox 360)",
     "gamepad_xone": "XOne (Xbox One)",
+    "gamepad_xseries": "XSeries (Xbox Series S|X)",
     "global_prep_cmd": "Parancs előkészítések",
     "global_prep_cmd_desc": "Konfigurálj egy listát parancsokról, amiket bármely alkalmazás futtatása előtt vagy után végre kell hajtani. Ha bármelyik megadott előkészítő parancs meghiúsul, az alkalmazásindítási folyamat megszakad.",
     "hevc_mode": "HEVC támogatás",

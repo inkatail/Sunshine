@@ -229,6 +229,7 @@
     "gamepad_manual": "Možnosti manuálního ovládání DS4",
     "gamepad_x360": "X360 (Xbox 360)",
     "gamepad_xone": "XOne (Xbox One)",
+    "gamepad_xseries": "XSeries (Xbox Series S|X)",
     "global_prep_cmd": "Příprava příkazů",
     "global_prep_cmd_desc": "Konfigurace seznamu příkazů, které se mají spustit před nebo po spuštění libovolné aplikace. Pokud některý ze zadaných přípravných příkazů selže, proces spuštění aplikace se přeruší.",
     "hevc_mode": "Podpora HEVC",

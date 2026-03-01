@@ -229,6 +229,7 @@
     "gamepad_manual": "DS4 手柄手动配置选项",
     "gamepad_x360": "X360 (Xbox 360)",
     "gamepad_xone": "XOne (Xbox One)",
+    "gamepad_xseries": "XSeries (Xbox Series S|X)",
     "global_prep_cmd": "命令准备工作",
     "global_prep_cmd_desc": "任何应用运行前/后要运行的命令列表。如果任何前置命令失败，应用的启动过程将被中止。",
     "hevc_mode": "HEVC 支持",

@@ -229,6 +229,7 @@
     "gamepad_manual": "Manuel DS4 seçenekleri",
     "gamepad_x360": "X360 (Xbox 360)",
     "gamepad_xone": "XOne (Xbox One)",
+    "gamepad_xseries": "XSeries (Xbox Series S|X)",
     "global_prep_cmd": "Komut Hazırlıkları",
     "global_prep_cmd_desc": "Herhangi bir uygulamayı çalıştırmadan önce veya sonra yürütülecek komutların bir listesini yapılandırın. Belirtilen hazırlık komutlarından herhangi biri başarısız olursa, uygulama başlatma işlemi iptal edilir.",
     "hevc_mode": "HEVC Desteği",

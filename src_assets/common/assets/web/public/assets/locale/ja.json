@@ -229,6 +229,7 @@
     "gamepad_manual": "DS4マニュアルオプション",
     "gamepad_x360": "X360 (Xbox 360)",
     "gamepad_xone": "XOne (Xbox One)",
+    "gamepad_xseries": "XSeries (Xbox Series S|X)",
     "global_prep_cmd": "コマンドの準備",
     "global_prep_cmd_desc": "アプリケーションの実行前または実行後に実行されるコマンドのリストを構成します。 指定された preparation コマンドのいずれかに失敗すると、アプリケーションの起動プロセスは中断されます。",
     "hevc_mode": "HEVC サポート",

@@ -229,6 +229,7 @@
     "gamepad_manual": "Manuella DS4-alternativ",
     "gamepad_x360": "X360 (Xbox 360)",
     "gamepad_xone": "XOne (Xbox One)",
+    "gamepad_xseries": "XSeries (Xbox Series S|X)",
     "global_prep_cmd": "Kommando förberedelser",
     "global_prep_cmd_desc": "Konfigurera en lista över kommandon som ska köras före eller efter att du kört något program. Om något av de angivna förberedelsekommandona misslyckas, kommer programstartprocessen att avbrytas.",
     "hevc_mode": "Stöd för HEVC",

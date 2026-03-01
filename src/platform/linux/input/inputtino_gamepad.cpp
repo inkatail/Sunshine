@@ -34,6 +34,14 @@ namespace platf::gamepad {
                                              .version = 0x0408});
   }
 
+  auto create_xbox_series() {
+    return inputtino::XboxOneJoypad::create({.name = "Sunshine X-Box Series S|X (virtual) pad",
+                                             // https://github.com/torvalds/linux/blob/master/drivers/input/joystick/xpad.c
+                                             .vendor_id = 0x045E,
+                                             .product_id = 0x0B12,
+                                             .version = 0x0408});
+  }
+
   auto create_switch() {
     return inputtino::SwitchJoypad::create({.name = "Sunshine Nintendo (virtual) pad",
                                             // https://github.com/torvalds/linux/blob/master/drivers/hid/hid-ids.h#L981
@@ -59,6 +67,9 @@ namespace platf::gamepad {
     if (config::input.gamepad == "xone"sv) {
       BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox One controller (manual selection)"sv;
       selectedGamepadType = XboxOneWired;
+    } else if (config::input.gamepad == "xseries"sv) {
+      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox Series S|X controller (manual selection)"sv;
+      selectedGamepadType = XboxSeriesWired;
     } else if (config::input.gamepad == "ds5"sv) {
       BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualSense 5 controller (manual selection)"sv;
       selectedGamepadType = DualSenseWired;
@@ -85,7 +96,7 @@ namespace platf::gamepad {
       selectedGamepadType = XboxOneWired;
     }
 
-    if (selectedGamepadType == XboxOneWired || selectedGamepadType == SwitchProWired) {
+    if (selectedGamepadType == XboxOneWired || selectedGamepadType == XboxSeriesWired || selectedGamepadType == SwitchProWired) {
       if (metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO)) {
         BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " has motion sensors, but they are not usable when emulating a joypad different from DS5"sv;
       }
@@ -127,6 +138,19 @@ namespace platf::gamepad {
             return 0;
           } else {
             BOOST_LOG(warning) << "Unable to create virtual Xbox One controller: " << xOne.getErrorMessage();
+            return -1;
+          }
+        }
+      case XboxSeriesWired:
+        {
+          auto xSeries = create_xbox_series();
+          if (xSeries) {
+            (*xSeries).set_on_rumble(on_rumble_fn);
+            gamepad->joypad = std::make_unique<joypads_t>(std::move(*xSeries));
+            raw->gamepads[id.globalIndex] = std::move(gamepad);
+            return 0;
+          } else {
+            BOOST_LOG(warning) << "Unable to create virtual Xbox Series S|X controller: " << xSeries.getErrorMessage();
             return -1;
           }
         }
@@ -267,6 +291,7 @@ namespace platf::gamepad {
       static std::vector gps {
         supported_gamepad_t {"auto", true, ""},
         supported_gamepad_t {"xone", false, ""},
+        supported_gamepad_t {"xseries", false, ""},
         supported_gamepad_t {"ds5", false, ""},
         supported_gamepad_t {"switch", false, ""},
       };
@@ -277,10 +302,12 @@ namespace platf::gamepad {
     auto ds5 = create_ds5(-1);  // Index -1 will result in a random MAC virtual device, which is fine for probing
     auto switchPro = create_switch();
     auto xOne = create_xbox_one();
+    auto xSeries = create_xbox_series();
 
     static std::vector gps {
       supported_gamepad_t {"auto", true, ""},
       supported_gamepad_t {"xone", static_cast<bool>(xOne), !xOne ? xOne.getErrorMessage() : ""},
+      supported_gamepad_t {"xseries", static_cast<bool>(xSeries), !xSeries ? xSeries.getErrorMessage() : ""},
       supported_gamepad_t {"ds5", static_cast<bool>(ds5), !ds5 ? ds5.getErrorMessage() : ""},
       supported_gamepad_t {"switch", static_cast<bool>(switchPro), !switchPro ? switchPro.getErrorMessage() : ""},
     };
