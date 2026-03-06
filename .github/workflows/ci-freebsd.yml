@@ -116,7 +116,7 @@ jobs:
               graphics/vulkan-headers \
               graphics/vulkan-loader \
               graphics/wayland \
-              lang/python312 \
+              lang/python314 \
               multimedia/libva \
               multimedia/pipewire \
               net/miniupnpc \
@@ -135,13 +135,13 @@ jobs:
             ln -s /usr/local/bin/bash /bin/bash
 
             # setup python
-            ln -s /usr/local/bin/python3.12 /usr/local/bin/python
+            ln -s /usr/local/bin/python3.14 /usr/local/bin/python
             python -m ensurepip
           release: ${{ matrix.bsd_release }}
           run: |
             set -e
             # install gcvor
-            python -m pip install gcovr
+            python -m pip install "./scripts[test]"
 
             # fix git safe.directory issues
             git config --global --add safe.directory "*"
@@ -262,7 +262,7 @@ jobs:
         if: >-
           always() &&
           (steps.test_report.outcome == 'success')
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: coverage-FreeBSD-${{ matrix.bsd_release }}-${{ matrix.cmake_processor }}
           path: |
@@ -271,7 +271,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: build-FreeBSD-${{ matrix.bsd_release }}-${{ matrix.cmake_processor }}
           path: artifacts/

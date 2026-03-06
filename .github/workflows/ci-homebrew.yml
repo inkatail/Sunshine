@@ -52,7 +52,7 @@ jobs:
     steps:
       - name: More space
         if: runner.os == 'Linux'
-        uses: LizardByte/actions/actions/more_space@6be4ea62064b64957aa880252fe353cd65bcdef7  # v2026.214.14019
+        uses: LizardByte/actions/actions/more_space@70bb8d394d1c92f6113aeec6ae9cc959a5763d15  # v2026.227.200013
         with:
           analyze-space-savings: true
           clean-all: true
@@ -122,7 +122,7 @@ jobs:
 
       - name: Upload Artifacts
         if: matrix.release
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: build-Homebrew
           path: homebrew/
@@ -144,7 +144,7 @@ jobs:
       - name: Validate Homebrew Formula
         id: test
         if: matrix.release != true
-        uses: LizardByte/actions/actions/release_homebrew@6be4ea62064b64957aa880252fe353cd65bcdef7  # v2026.214.14019
+        uses: LizardByte/actions/actions/release_homebrew@70bb8d394d1c92f6113aeec6ae9cc959a5763d15  # v2026.227.200013
         with:
           actionlint_config: "---\n# empty config"
           formula_file: ${{ github.workspace }}/homebrew/sunshine.rb
@@ -160,7 +160,7 @@ jobs:
           always() &&
           matrix.release != true &&
           (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: coverage-Homebrew-${{ matrix.os_name }}-${{ matrix.os_version }}
           path: |
@@ -204,7 +204,7 @@ jobs:
 
       - name: Upload Artifacts (Beta)
         if: matrix.release
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: beta-Homebrew
           path: homebrew/
