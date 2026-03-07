@@ -182,11 +182,15 @@ namespace vk {
     }
 
     void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
-      // Set a single-frame VBV buffer size to prevent bitrate excursions.
-      // Without this, AMD GPUs accumulate unused bitrate budget during static
-      // scenes and overshoot when motion resumes.
+      // Constrain the rate controller to a single-frame VBV buffer to reduce
+      // bitrate excursions. Without this, the default HRD buffer equals the
+      // full bitrate (1 second of data), allowing the encoder to accumulate
+      // large unused budget during static content and overshoot when motion
+      // resumes. Additionally, start the buffer empty so the encoder has no
+      // initial headroom to spike.
       if (config::video.vk.strict_rc_buffer && ctx->bit_rate > 0 && ctx->framerate.num > 0) {
         ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+        ctx->rc_initial_buffer_occupancy = 0;
       }
     }
 
