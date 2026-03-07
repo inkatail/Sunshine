@@ -488,7 +488,7 @@ namespace config {
     {
       2,  // vk.tune (default: ll - low latency)
       4,  // vk.rc_mode (default: vbr)
-      true,  // vk.strict_rc_buffer
+      false,  // vk.strict_rc_buffer
     },
 
     {},  // capture

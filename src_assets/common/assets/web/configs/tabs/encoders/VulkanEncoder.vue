@@ -41,7 +41,7 @@ const config = ref(props.config)
               id="vk_strict_rc_buffer"
               locale-prefix="config"
               v-model="config.vk_strict_rc_buffer"
-              default="true"
+              default="false"
     ></Checkbox>
   </div>
 </template>
