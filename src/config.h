@@ -84,6 +84,8 @@ namespace config {
       int tune;     // 0=default, 1=hq, 2=ll, 3=ull, 4=lossless
       int rc_mode;  // 0=driver, 1=cqp, 2=cbr, 4=vbr
       bool strict_rc_buffer;
+      int qmin;  // -1=disabled, 0-51 for H.264/H.265, 0-255 for AV1
+      int qmax;  // -1=disabled, 0-51 for H.264/H.265, 0-255 for AV1
     } vk;
 
     std::string capture;

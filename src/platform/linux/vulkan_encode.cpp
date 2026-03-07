@@ -192,6 +192,14 @@ namespace vk {
         ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
         ctx->rc_initial_buffer_occupancy = 0;
       }
+
+      if (config::video.vk.qmin >= 0) {
+        ctx->qmin = config::video.vk.qmin;
+      }
+
+      if (config::video.vk.qmax >= 0) {
+        ctx->qmax = config::video.vk.qmax;
+      }
     }
 
     int convert(platf::img_t &img) override {

@@ -43,6 +43,20 @@ const config = ref(props.config)
               v-model="config.vk_strict_rc_buffer"
               default="false"
     ></Checkbox>
+
+    <!-- Minimum QP -->
+    <div class="mb-3">
+      <label for="vk_qmin" class="form-label">{{ $t('config.vk_qmin') }}</label>
+      <input type="number" id="vk_qmin" class="form-control" v-model="config.vk_qmin" min="-1" max="255" />
+      <div class="form-text">{{ $t('config.vk_qmin_desc') }}</div>
+    </div>
+
+    <!-- Maximum QP -->
+    <div class="mb-3">
+      <label for="vk_qmax" class="form-label">{{ $t('config.vk_qmax') }}</label>
+      <input type="number" id="vk_qmax" class="form-control" v-model="config.vk_qmax" min="-1" max="255" />
+      <div class="form-text">{{ $t('config.vk_qmax_desc') }}</div>
+    </div>
   </div>
 </template>
 

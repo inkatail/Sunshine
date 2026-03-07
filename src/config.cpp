@@ -489,6 +489,8 @@ namespace config {
       2,  // vk.tune (default: ll - low latency)
       4,  // vk.rc_mode (default: vbr)
       false,  // vk.strict_rc_buffer
+      -1,  // vk.qmin (default: disabled)
+      -1,  // vk.qmax (default: disabled)
     },
 
     {},  // capture
@@ -1124,6 +1126,8 @@ namespace config {
     int_f(vars, "vk_tune", video.vk.tune);
     int_f(vars, "vk_rc_mode", video.vk.rc_mode);
     bool_f(vars, "vk_strict_rc_buffer", video.vk.strict_rc_buffer);
+    int_f(vars, "vk_qmin", video.vk.qmin);
+    int_f(vars, "vk_qmax", video.vk.qmax);
 
     string_f(vars, "capture", video.capture);
     string_f(vars, "encoder", video.encoder);
