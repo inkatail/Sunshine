@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+import Checkbox from "../../../Checkbox.vue";
 
 const props = defineProps([
   'platform',
@@ -34,6 +35,14 @@ const config = ref(props.config)
       </select>
       <div class="form-text">{{ $t('config.vk_rc_mode_desc') }}</div>
     </div>
+
+    <!-- Strict RC Buffer -->
+    <Checkbox class="mb-3"
+              id="vk_strict_rc_buffer"
+              locale-prefix="config"
+              v-model="config.vk_strict_rc_buffer"
+              default="true"
+    ></Checkbox>
   </div>
 </template>
 

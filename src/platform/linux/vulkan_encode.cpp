@@ -181,6 +181,15 @@ namespace vk {
         VK_IMAGE_USAGE_SAMPLED_BIT);
     }
 
+    void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
+      // Set a single-frame VBV buffer size to prevent bitrate excursions.
+      // Without this, AMD GPUs accumulate unused bitrate budget during static
+      // scenes and overshoot when motion resumes.
+      if (config::video.vk.strict_rc_buffer && ctx->bit_rate > 0 && ctx->framerate.num > 0) {
+        ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
+      }
+    }
+
     int convert(platf::img_t &img) override {
       auto &descriptor = (egl::img_descriptor_t &) img;
 
