@@ -1985,7 +1985,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
     <tr>
         <td>Range</td>
-        <td colspan="2">1-255</td>
+        <td colspan="2">0-100</td>
     </tr>
     <tr>
         <td>Example</td>
