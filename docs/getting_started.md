@@ -573,7 +573,7 @@ Sunshine supports two virtual gamepad backends on Windows. You can install the
 for a driver-backed Raw Input keyboard and mouse plus full virtual gamepad support. ViGEmBus remains available as a
 limited alternative for Xbox 360 and DualShock 4 gamepads, but it has reached end of life.
 
-When Virtual HID Driver is used, Sunshine requires version `2026.905.2300.20` or newer.
+When Virtual HID Driver is used, Sunshine requires version `2026.914.1218.10` or newer.
 
 Compared with the ViGEmBus fallback, Virtual HID Driver can create Xbox One, Xbox Series, DualSense, Nintendo Switch
 Pro, and Generic gamepads in addition to Xbox 360 and DualShock 4. It can also expose controller-specific features such
@@ -725,7 +725,6 @@ All shortcuts start with `Ctrl+Alt+Shift`, just like Moonlight.
 * The "Desktop" app works the same as any other application except it has no commands. It does not start an application,
   instead it simply starts a stream. If you removed it and would like to get it back, just add a new application with
   the name "Desktop" and "desktop.png" as the image path.
-* For the Linux flatpak you must prepend commands with `flatpak-spawn --host`.
 * If inputs (mouse, keyboard, gamepads...) aren't working after connecting:
 
   * On FreeBSD/Linux, add the user running sunshine to the `input` group.
