@@ -78,6 +78,7 @@
   #include "process.h"
   #include "src/entry_handler.h"
   #include "system_tray.h"
+  #include "thread_safe.h"
   #ifdef _WIN32
     #include "platform/windows/utf_utils.h"
   #endif
@@ -290,10 +291,26 @@ namespace system_tray {
   static auto virtualhid_license_menu = initial_virtualhid_license_menu();  ///< Virtual HID Broker license submenu.
   #endif
 
+  #ifdef __APPLE__
+  /**
+   * @brief Leave macOS tray menu presentation to Qt's native status item.
+   *
+   * Qt opens an attached context menu on mouse press. Supplying a callback
+   * prevents the tray library from opening a second popup on activation.
+   *
+   * @param tray_icon Tray icon that received the click.
+   */
+  void tray_native_menu_click_cb([[maybe_unused]] struct tray *tray_icon) {
+  }
+  #endif
+
   // Tray menu
   static struct tray tray = {
     .icon = TRAY_ICON,
     .tooltip = PROJECT_NAME,
+  #ifdef __APPLE__
+    .cb = tray_native_menu_click_cb,
+  #endif
     .menu =
       (struct tray_menu[]) {
         // Tray menu labels currently use the project's English source strings.
@@ -816,6 +833,11 @@ namespace system_tray {
 
     // Block until an event is processed or tray_quit() is called
     return tray_loop(1);
+  }
+
+  void run_tray_until_exit(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) {
+    while (process_tray_events() == 0);
+    shutdown_event->raise(true);
   }
 
   int end_tray() {
