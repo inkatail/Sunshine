@@ -52,10 +52,16 @@ file(COPY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/"
         DESTINATION "${CMAKE_BINARY_DIR}/assets"
         PATTERN "shaders" EXCLUDE)
 # use junction for shaders directory
+# windows-legacy: cmd.exe mklink only exists on a Windows host. Under Linux->Windows
+# cross, create a symlink with cmake -E instead.
 cmake_path(CONVERT "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/shaders"
         TO_NATIVE_PATH_LIST shaders_in_build_src_native)
 cmake_path(CONVERT "${CMAKE_BINARY_DIR}/assets/shaders" TO_NATIVE_PATH_LIST shaders_in_build_dest_native)
-execute_process(COMMAND cmd.exe /c mklink /J "${shaders_in_build_dest_native}" "${shaders_in_build_src_native}")
+if(CMAKE_HOST_WIN32)
+    execute_process(COMMAND cmd.exe /c mklink /J "${shaders_in_build_dest_native}" "${shaders_in_build_src_native}")
+else()
+    execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/shaders" "${CMAKE_BINARY_DIR}/assets/shaders")
+endif()
 
 set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}\\\\sunshine.ico")
 

@@ -50,7 +50,9 @@ endif()
 #WebUI build
 find_program(NPM npm REQUIRED)
 
-if(WIN32)
+# windows-legacy: under Linux->Windows cross (CMAKE_CROSSCOMPILING) the build host is Linux,
+# so use host-native npm/node directly. The cmd.exe / npm.cmd path is native-Windows only.
+if(WIN32 AND NOT CMAKE_CROSSCOMPILING)
     get_filename_component(NPM_DIRECTORY "${NPM}" DIRECTORY)
     find_program(NPM_NODE_EXECUTABLE NAMES node node.exe HINTS "${NPM_DIRECTORY}" NO_DEFAULT_PATH NO_CACHE REQUIRED)
     string(CONCAT NPM_NODE_GNU_BINDING_CHECK

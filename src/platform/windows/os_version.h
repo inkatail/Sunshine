@@ -23,6 +23,9 @@
 // platform includes
 #include <Windows.h>
 
+// local includes
+#include "os_version_check.h"
+
 namespace platf::win_legacy {
   /**
    * @brief Raw OS version triple reported by RtlGetVersion.
@@ -94,7 +97,7 @@ namespace platf::win_legacy {
    */
   inline bool is_win8_or_greater() {
     const auto v = os_version();
-    return (v.major > 6) || (v.major == 6 && v.minor >= 2);
+    return is_win8_or_greater_version(v.major, v.minor);
   }
 
   /**
@@ -104,7 +107,7 @@ namespace platf::win_legacy {
    */
   inline bool is_win81_or_greater() {
     const auto v = os_version();
-    return (v.major > 6) || (v.major == 6 && v.minor >= 3);
+    return is_win81_or_greater_version(v.major, v.minor);
   }
 
   /**
@@ -114,7 +117,7 @@ namespace platf::win_legacy {
    */
   inline bool is_win10_or_greater() {
     const auto v = os_version();
-    return v.major >= 10;
+    return is_win10_or_greater_version(v.major, v.minor);
   }
 
   /**
@@ -124,6 +127,6 @@ namespace platf::win_legacy {
    */
   inline bool is_windows_7() {
     const auto v = os_version();
-    return v.major == 6 && v.minor == 1;
+    return is_windows_7_version(v.major, v.minor);
   }
 }  // namespace platf::win_legacy

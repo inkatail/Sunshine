@@ -23,9 +23,14 @@ Branch: `windows-legacy` (this branch).
 
 Net effect today:
 
-- **Windows 7:** both DDX and WGC are disabled by design. The process starts (no hard Win10 imports) but `platf::display()` returns `nullptr` until NvFBC-Windows or GDI lands. This is intentional: previous code would install then fail at runtime with misleading `DuplicateOutput` errors.
-- **Windows 8.0/8.1:** DDX works (`DuplicateOutput`, not `DuplicateOutput1`). WGC is skipped. Win10-only code paths (Output6 HDR, `win32u.dll` hook, `SetThreadDescription`, `SetProcessDpiAwarenessContext`, high-resolution timer flag, `JOB_LIST`) are guarded.
-- **Windows 10/11:** unchanged behavior (DDX first, WGC fallback).
+- **Windows 7:** both DDX and WGC are disabled by design. The process starts (no hard Win10 imports) but `platf::display()` returns `nullptr` until a Win7 capture backend lands. This is intentional: previous code would install then fail at runtime with misleading `DuplicateOutput` errors. Per branch decision, no `BitBlt`/GDI backend is being added yet.
+- **Windows 8.0/8.1:** DDX stays enabled (`DuplicateOutput`, not `DuplicateOutput1`). WGC is skipped. Win10-only code paths (Output6 HDR, `win32u.dll` hook, `SetThreadDescription`, `SetProcessDpiAwarenessContext`, high-resolution timer flag, `JOB_LIST`) are guarded. Covered by `tests/unit/test_os_version.cpp` (`6.2`/`6.3` → DDX true, WGC false).
+- **Windows 10/11:** unchanged behavior (DDX first, WGC fallback). Covered by `10.0` → DDX true, WGC true.
+
+### NvFBC vs NVENC (no adjustment needed)
+
+- **NvFBC = capture, Linux-only in this tree.** Only hits are `src/platform/linux/cuda.cpp:13,725,888,1115` (`NvFBCCreateInstance` → `nvFBCToCudaSetUp/GrabFrame`) and the bundled `third-party/nvfbc/NvFBC.h:2` ("NvFBC API for Linux", X11 + CUDA). There is no `NvFBC`/`NvFBCCreateInstance`/`NvFBCToDx9` implementation under `src/platform/windows/` or `src/nvenc/`. Nothing to adjust on Windows.
+- **NVENC = encode, already Windows-native.** `src/nvenc/nvenc_d3d11_native.cpp:15` (`NV_ENC_DEVICE_TYPE_DIRECTX` + `NvEncRegisterResource`), `nvenc_d3d11_on_cuda.cpp:15`, `nvenc_dynamic_factory.cpp:20,82` (`nvEncodeAPI{64,a64,}.dll`, SDK 11.0–13.1, min driver `456.71`). It consumes D3D11 textures from whatever capture backend is active (`display_vram.cpp:2133`), so the DDX/WGC OS gating above is the only capture-side change it needs. No encoder change in this iteration.
 
 ### Loader / API guards in this iteration
 
@@ -56,6 +61,8 @@ commits have a checklist:
 
 ## Building for legacy Windows
 
+Native (MSYS2, as upstream documents in `docs/building.md:166`):
+
 ```powershell
 # 8.x (DDX, no WGC needed but harmless to keep):
 cmake -B build -G Ninja -S . -DSUNSHINE_ENABLE_TRAY=ON
@@ -64,13 +71,45 @@ cmake -B build -G Ninja -S . -DSUNSHINE_ENABLE_TRAY=ON
 cmake -B build -G Ninja -S . -DSUNSHINE_ENABLE_WGC=OFF -DSUNSHINE_ENABLE_TRAY=OFF
 ```
 
+Cross from Linux (new on this branch):
+
+Upstream states `docs/building.md:170` "Cross-compilation is not supported on
+Windows. You must build on the target architecture." This branch adds a baseline
+so the Windows target can be configured from a Linux host:
+
+- `cmake/toolchain/windows-mingw64-x86_64.cmake`: `CMAKE_SYSTEM_NAME=Windows`,
+  `x86_64-w64-mingw32-{gcc,g++,windres}`, target-only find roots,
+  `STATIC_LIBRARY` try-compile (no target execution).
+- `cmake/targets/common.cmake`: under `CMAKE_CROSSCOMPILING` the web-ui uses
+  host-native `npm`/`node` directly (no `cmd /C call`, no `npm.cmd` lookup).
+- `cmake/packaging/windows.cmake`: shader junction uses `cmake -E create_symlink`
+  unless `CMAKE_HOST_WIN32` (where `mklink /J` is kept).
+
+```bash
+# Arch Linux host: bare toolchain + submodules; sysroot deps still required
+sudo pacman -S mingw-w64-gcc
+git submodule update --init --recursive
+cmake -B cmake-build-cross-mingw -S . \
+  --toolchain cmake/toolchain/windows-mingw64-x86_64.cmake \
+  -DSUNSHINE_ENABLE_WGC=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DBUILD_TESTS=OFF -DBUILD_DOCS=OFF
+cmake --build cmake-build-cross-mingw
+```
+
+Verified 2026-10-04: toolchain configures `GNU 16.2.0` cross compilers correctly;
+configure stops later at missing sysroot deps (`third-party/build-deps`
+uninitialized, `FindOpenSSL` for `x86_64-w64-mingw32`) until AUR
+`mingw-w64-boost/openssl/etc.` are installed. FFmpeg itself is not cross-built:
+`cmake/dependencies/ffmpeg.cmake:18` downloads `Windows-AMD64-ffmpeg.tar.gz`
+prebuilts. `cppwinrt`/`qt6-static`/`oneVPL`/`MinHook` sysroot packages are still
+required for full `WGC=ON` / tray builds, hence `WGC=OFF` + `TRAY=OFF` above.
+
 Run `tools/dxgi` (now 7-safe) to verify enumeration before streaming.
 
 ## Roadmap
 
 1. Land this gating (done here) so 8.x works and 7 fails with a clear log.
-2. Implement `display_gdi_ram_t` / `display_gdi_vram_t` (GDI `BitBlt` → D3D11 upload, cursor via `GetCursorInfo` + `DrawIconEx`).
-3. Implement Windows NvFBC backend for NVIDIA (separate SDK headers, not `third-party/nvfbc/NvFBC.h`).
+2. Deferred per branch decision: no GDI/`BitBlt` backend in this iteration.
+3. Windows NvFBC backend for NVIDIA only if GRID SDK headers are added (separate from `third-party/nvfbc/NvFBC.h`).
 4. Win7 toolchain docs + CI job (`msvcrt`, `SUNSHINE_ENABLE_WGC=OFF`, `SUNSHINE_ENABLE_TRAY=OFF`).
 5. Installer OS gate + UCRT bootstrap.
 6. Vista pass (only after 7 + 8.x are green).
