@@ -938,13 +938,39 @@ namespace platf::dxgi {
       return last_height;
     }
 
+    /**
+     * @brief Report whether the last grabbed frame changed.
+     *
+     * @details Damage detection equivalent to DXGI's `AccumulatedFrames` /
+     * `LastPresentTime` check: with the default 128x128 diff-map blocks, an
+     * all-zero map means a static screen and the caller should skip the copy
+     * and encode (returned as `timeout` upstream).
+     * @return True when pixels changed or damage tracking is unavailable.
+     */
+    bool frame_has_changes() const {
+      if (!diffmap_active || !diffmap_storage || !last_width || !last_height) {
+        return true;
+      }
+      const auto blocks_x = (last_width + 128 - 1) / 128;
+      const auto blocks_y = (last_height + 128 - 1) / 128;
+      const auto *bytes = static_cast<const std::uint8_t *>(diffmap_storage);
+      for (unsigned int i = 0; i < blocks_x * blocks_y; ++i) {
+        if (bytes[i]) {
+          return true;
+        }
+      }
+      return false;
+    }
+
   private:
     void *session = nullptr;  ///< NvFBC ToSys interface object from CreateEx.
     void *buffer_storage = nullptr;  ///< Driver-owned frame buffer from ToSys setup.
+    void *diffmap_storage = nullptr;  ///< Driver-owned diff-map buffer (null when disabled).
     const std::uint8_t *frame_bytes = nullptr;  ///< Latest grabbed frame bytes.
     unsigned int buffer_stride = 0;  ///< Padded buffer stride in pixels.
     unsigned int last_width = 0;  ///< Desktop width from the last grab.
     unsigned int last_height = 0;  ///< Desktop height from the last grab.
+    bool diffmap_active = false;  ///< Diff-map damage detection negotiated.
     bool initialized = false;  ///< Session is active.
   };
 

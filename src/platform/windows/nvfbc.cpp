@@ -269,7 +269,21 @@ namespace platf::dxgi {
     params.pPrivateData = key.data();
     params.dwPrivateDataSize = (nvfbc_win::nv_u32_t) key.size();
     if (lib.create_ex(&params) != nvfbc_win::NVFBC_WIN_SUCCESS || !params.pNvFBC) {
-      BOOST_LOG(error) << "NvFBC_CreateEx(ToSys) failed on adapter "sv << adapter_idx << "; on GeForce this usually means the unlock key was rejected (see NVFBC_PRIV_DATA)"sv;
+      // Adapter ordinals differ between driver generations; retry the default
+      // before giving up (single-GPU systems converge here either way).
+      if (adapter_idx != 0) {
+        BOOST_LOG(warning) << "NvFBC_CreateEx(ToSys) failed on adapter "sv << adapter_idx << "; retrying default adapter"sv;
+        params.dwAdapterIdx = 0;
+        params.pNvFBC = nullptr;
+        if (lib.create_ex(&params) != nvfbc_win::NVFBC_WIN_SUCCESS || !params.pNvFBC) {
+          params.dwAdapterIdx = adapter_idx;
+          params.pNvFBC = nullptr;
+        }
+      }
+    }
+    if (!params.pNvFBC) {
+      BOOST_LOG(error) << "NvFBC_CreateEx(ToSys) failed on adapter "sv << adapter_idx << "; on GeForce this usually means the unlock key was rejected (see NVFBC_PRIV_DATA). "
+        "Sessions also cannot be created while an app is fullscreen on any head; create it at startup."sv;
       return -1;
     }
 
@@ -279,10 +293,21 @@ namespace platf::dxgi {
     setup.bWithHWCursor = 1;  // Cursor composited by the driver (GameStream behavior).
     setup.eMode = nvfbc_win::TOSYS_ARGB;
     setup.ppBuffer = &buffer_storage;
+    // Damage detection like DXGI's frame-update check: static screens skip the
+    // copy and encode. Fall back to plain capture when the driver refuses it.
+    setup.bDiffMap = 1;
+    setup.ppDiffMap = &diffmap_storage;
     if (iface->setup(&setup) != nvfbc_win::NVFBC_WIN_SUCCESS || !buffer_storage) {
-      BOOST_LOG(error) << "NvFBC ToSys setup failed"sv;
-      iface->release();
-      return -1;
+      setup.bDiffMap = 0;
+      setup.ppDiffMap = nullptr;
+      diffmap_storage = nullptr;
+      if (iface->setup(&setup) != nvfbc_win::NVFBC_WIN_SUCCESS || !buffer_storage) {
+        BOOST_LOG(error) << "NvFBC ToSys setup failed"sv;
+        iface->release();
+        return -1;
+      }
+    } else {
+      diffmap_active = true;
     }
 
     session = iface;
@@ -347,7 +372,9 @@ namespace platf::dxgi {
       session = nullptr;
     }
     buffer_storage = nullptr;
+    diffmap_storage = nullptr;
     frame_bytes = nullptr;
+    diffmap_active = false;
     initialized = false;
     return capture_e::ok;
   }
@@ -358,6 +385,9 @@ namespace platf::dxgi {
       return -1;
     }
 
+    // Capture the input desktop like the DXGI backends do, so service
+    // (session 0) launches land on the user's desktop.
+    syncThreadDesktop();
     // Geometry comes from GDI so no DXGI duplication-capable output is needed.
     DEVMODEW mode {};
     mode.dmSize = sizeof(mode);
@@ -416,6 +446,11 @@ namespace platf::dxgi {
     if ((int) session.frame_width() < width || (int) session.frame_height() < height) {
       BOOST_LOG(info) << "NvFBC frame size changed; reinitializing capture"sv;
       return capture_e::reinit;
+    }
+
+    // Static screen: skip the copy and encode like the DXGI update-flag path.
+    if (!session.frame_has_changes()) {
+      return capture_e::timeout;
     }
 
     if (!pull_free_image_cb(img_out)) {

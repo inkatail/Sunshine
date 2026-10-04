@@ -202,16 +202,18 @@ function Write-LogFile {
 }
 
 # windows-legacy: legacy OS prerequisite checks.
-# Verifies the Windows version floor (6.1+), Windows PowerShell version,
-# .NET Framework 4.8 (not inbox on Win7/8.x), and the Universal CRT
-# (KB2999226 on Win7/8.x). Missing items warn with download locations;
+# Verifies the Windows version floor (6.1+), Windows PowerShell version
+# (this script uses Write-Information, i.e. PowerShell 5+), and the Universal
+# CRT (KB2999226 on Win7/8.x). Missing items warn with download locations;
 # an unsupported OS or PowerShell aborts the install with a clear message.
+# NOTE: nothing in Sunshine's Windows runtime needs .NET Framework itself,
+# so there is intentionally no .NET check here.
 function Test-LegacyPrerequisites {
-    # This script uses Write-Information/Write-Progress (PowerShell 5+).
+    # This script uses Write-Information (PowerShell 5+).
     # Stock Windows 7 ships PowerShell 2.0; WMF 5.1 is required there.
-    if ($PSVersionTable.PSVersion.Major -lt 3) {
-        Write-Warning "Sunshine setup requires Windows PowerShell 3.0 or newer."
-        Write-Warning "On Windows 7, install Windows Management Framework 5.1 first: https://aka.ms/wmf5download"
+    if ($PSVersionTable.PSVersion.Major -lt 5) {
+        Write-Warning "Sunshine setup requires Windows PowerShell 5.0 or newer (this Windows has $($PSVersionTable.PSVersion))."
+        Write-Warning "On Windows 7/8.x, install Windows Management Framework 5.1 first: https://aka.ms/wmf5download"
         exit 1
     }
 
@@ -229,19 +231,6 @@ function Test-LegacyPrerequisites {
         Write-LogMessage -Message "Detected OS: $($os.Caption) ($($os.Version))" -Level "Information"
     } catch {
         Write-LogMessage -Message "Could not determine OS version, continuing anyway: $($_.Exception.Message)" -Level "Warning"
-    }
-
-    # .NET Framework 4.8+: release DWORD >= 528040 under NDP\v4\Full.
-    # Not preinstalled on Windows 7/8.x; some Sunshine components expect it.
-    try {
-        $release = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' -Name Release -ErrorAction Stop).Release
-        if ($release -lt 528040) {
-            Write-LogMessage -Message ".NET Framework 4.8 or newer was not detected (release $release). Install it from https://dotnet.microsoft.com/download/dotnet-framework" -Level "Warning"
-        } else {
-            Write-LogMessage -Message ".NET Framework release detected: $release" -Level "Information"
-        }
-    } catch {
-        Write-LogMessage -Message ".NET Framework 4.8 or newer was not detected. Install it from https://dotnet.microsoft.com/download/dotnet-framework" -Level "Warning"
     }
 
     # Universal CRT: inbox on Windows 10+, update KB2999226 on 7/8.x.
@@ -355,7 +344,7 @@ if ($Action -eq "install") {
         -Activity "Installing Sunshine" `
         -Status "Checking prerequisites" `
         -PercentComplete (($currentStep / $totalSteps) * 100)
-    Write-LogMessage -Message "🔍 Checking prerequisites (.NET 4.8, Universal CRT, OS version)" -Level "Step"
+    Write-LogMessage -Message "🔍 Checking prerequisites (Universal CRT, OS version)" -Level "Step"
     Test-LegacyPrerequisites
     Write-LogMessage -Message "  ✓ Done" -Level "Success"
     Write-Information ""

@@ -2217,6 +2217,9 @@ namespace platf::dxgi {
       return -1;
     }
 
+    // Capture the input desktop like the DXGI backends do, so service
+    // (session 0) launches land on the user's desktop.
+    syncThreadDesktop();
     // Geometry comes from GDI so no DXGI duplication-capable output is needed.
     DEVMODEW mode {};
     mode.dmSize = sizeof(mode);
@@ -2325,6 +2328,11 @@ namespace platf::dxgi {
     if ((int) session.frame_width() < width || (int) session.frame_height() < height) {
       BOOST_LOG(info) << "NvFBC frame size changed; reinitializing capture"sv;
       return capture_e::reinit;
+    }
+
+    // Static screen: skip the upload and encode like the DXGI update-flag path.
+    if (!session.frame_has_changes()) {
+      return capture_e::timeout;
     }
 
     std::shared_ptr<platf::img_t> img;

@@ -47,6 +47,18 @@ Windows implementation:
   shared `IsCurrent()` loop, ARGB crop into software images).
 - `display_nvfbc_vram_t` in `display_vram.cpp`: same capture, uploaded via a
   D3D11 staging texture into the shared encoder texture for NVENC.
+- Optimizations ported from the DXGI backends: diff-map damage detection
+  (`bDiffMap`, default 128x128 blocks, graceful fallback when refused) skips
+  the copy and encode on static screens exactly like DXGI's
+  `AccumulatedFrames` check; `syncThreadDesktop()` in both inits so service
+  (session 0) launches capture the user desktop; adapter-ordinal retry
+  against the default adapter; throttled DRM warnings.
+- Known limitations (not defects, documented): the HW cursor is composited by
+  the driver, so it is always visible even when the client hides it
+  (GameStream behaved the same); multi-monitor crop assumes the NvFBC buffer
+  origin is the virtual-desktop origin (exact for single-display hosts);
+  SDR only (no `bHDRRequest`); ToSys round-trips through system memory — the
+  zero-copy Dx9Vid target is future work.
 - Factory order in `display_base.cpp`: explicit `capture=nvfbc` anywhere;
   autodetect tries DDX, then NvFBC, then WGC. New `nvfbc` option in the
   Advanced tab (Windows). `display_names()` falls back to GDI enumeration
@@ -100,17 +112,19 @@ commits have a checklist:
 
 - `sunshine-setup.ps1` runs a `Test-LegacyPrerequisites` step first (both MSI
   custom actions and NSIS `nsExec` go through it): aborts below Windows 7 and
-  below PowerShell 3 (stock Win7 ships PS 2.0 → install WMF 5.1,
-  `https://aka.ms/wmf5download`), warns when .NET Framework 4.8+ is missing
-  (`https://dotnet.microsoft.com/download/dotnet-framework`), warns when
-  `ucrtbase.dll` is missing (Win7/8.x need KB2999226,
+  below PowerShell 5 (stock Win7 ships PS 2.0 → install WMF 5.1,
+  `https://aka.ms/wmf5download`; the script itself uses `Write-Information`),
+  warns when `ucrtbase.dll` is missing (Win7/8.x need KB2999226,
   `https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment`),
   and notes the VC++ redist situation (MinGW `-static` builds only need the OS
   UCRT; MSVC builds need the matching VC redist).
-- WiX (`wix.template.in`) blocks below `VersionNT >= 601` and without .NET 4.8
-  (`Release >= 528040`) with plain-language messages. NSIS has no custom
-  `WinVer` include in the CPack template, so it relies on the PS1 gate above.
-- Full offline bundling of the .NET/VCRT/UCRT installers (WiX Burn bundle) is
+- No .NET Framework check exists, intentionally: nothing in Sunshine's Windows
+  runtime uses .NET (no managed code in `src/`, `tools/`, or the installer
+  actions; WiX `dotnet` is build-host tooling only).
+- WiX (`wix.template.in`) blocks below `VersionNT >= 601` with a plain-language
+  message. NSIS has no custom `WinVer` include in the CPack template, so it
+  relies on the PS1 gate above.
+- Full offline bundling of the UCRT/VC redist installers (WiX Burn bundle) is
   still open; current behavior fails fast with download locations.
 
 ## Building for legacy Windows
@@ -178,7 +192,7 @@ Run `tools/dxgi` (now 7-safe) to verify enumeration before streaming.
 ## Roadmap
 
 1. NvFBC Windows ToSys backend (done here): Win7/NVIDIA capture for software and NVENC encoding.
-2. Installer offline bundling (WiX Burn) for .NET/UCRT/VC redist.
+2. Installer offline bundling (WiX Burn) for UCRT/VC redist.
 3. Win7 toolchain CI job reusing the cross path.
 4. GDI fallback for AMD/Intel on 7 (deferred per branch decision).
 5. Vista pass (only after 7 + 8.x are green).

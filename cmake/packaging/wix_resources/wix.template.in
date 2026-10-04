@@ -25,14 +25,10 @@
             Schedule="afterInstallInitialize"
             AllowDowngrades="yes"/>
 
-        <!-- windows-legacy: OS floor (Windows 7 / Server 2008 R2+) with a clear message instead of a cryptic failure later. -->
+        <!-- windows-legacy: OS floor (Windows 7 / Server 2008 R2+) with a clear message instead of a cryptic failure later.
+             No .NET Framework check: nothing in Sunshine's Windows runtime needs .NET (verified: no managed
+             code in src/, tools/, or the installer custom actions; WiX 'dotnet' is build-host tooling only). -->
         <Launch Condition="Installed OR VersionNT &gt;= 601" Message="Sunshine requires Windows 7 or newer." />
-
-        <!-- windows-legacy: .NET Framework 4.8+ is not inbox on Win7/8.x but is expected on legacy targets. -->
-        <Property Id="DOTNET48_RELEASE">
-            <RegistrySearch Root="HKLM" Key="SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" Name="Release" Type="raw" Win64="yes" />
-        </Property>
-        <Launch Condition="Installed OR DOTNET48_RELEASE &gt;= &quot;528040&quot;" Message="Sunshine requires Microsoft .NET Framework 4.8 or newer. Please install it from https://dotnet.microsoft.com/download/dotnet-framework and run this installer again." />
 
         <WixVariable Id="WixUILicenseRtf" Value="$(var.CPACK_WIX_LICENSE_RTF)"/>
         <Property Id="WIXUI_INSTALLDIR" Value="INSTALL_ROOT"/>
