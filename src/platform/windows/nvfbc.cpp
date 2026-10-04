@@ -290,6 +290,25 @@ namespace platf::dxgi {
     return 0;
   }
 
+  bool nvfbc_capture_t::display_is_attached(const std::string &display_name) {
+    if (display_name.empty()) {
+      return true;
+    }
+    const auto wanted = utf_utils::from_utf8(display_name);
+    DISPLAY_DEVICEW adapter {};
+    adapter.cb = sizeof(adapter);
+    for (DWORD adapter_idx = 0; EnumDisplayDevicesW(nullptr, adapter_idx, &adapter, 0); ++adapter_idx) {
+      DISPLAY_DEVICEW monitor {};
+      monitor.cb = sizeof(monitor);
+      for (DWORD monitor_idx = 0; EnumDisplayDevicesW(adapter.DeviceName, monitor_idx, &monitor, 0); ++monitor_idx) {
+        if (std::wstring {monitor.DeviceName} == wanted && (monitor.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   int nvfbc_capture_t::init(unsigned int adapter_idx, int width, int height) {
     auto &lib = nvfbc_library();
     if (!lib.load()) {
@@ -438,6 +457,10 @@ namespace platf::dxgi {
     DEVMODEW mode {};
     mode.dmSize = sizeof(mode);
     std::wstring wide_name = display_name.empty() ? std::wstring {} : utf_utils::from_utf8(display_name);
+    if (!display_name.empty() && !nvfbc_capture_t::display_is_attached(display_name)) {
+      BOOST_LOG(error) << "NvFBC: display ["sv << display_name << "] is not attached to the desktop"sv;
+      return -1;
+    }
     if (!EnumDisplaySettingsW(display_name.empty() ? nullptr : wide_name.c_str(), ENUM_CURRENT_SETTINGS, &mode)) {
       BOOST_LOG(error) << "NvFBC: failed to query display settings for ["sv << display_name << ']';
       return -1;
@@ -687,14 +710,11 @@ namespace platf::dxgi {
     const unsigned int adapter_idx = nvfbc_capture_t::adapter_index_for_display(display_name);
     auto key = priv_data_key();
     diff_buffer = VirtualAlloc(nullptr, nvfbc_win::DX9VID_MAX_DIFF_MAP_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    // Create the session, with diff-map damage detection first. A failed
-    // setup releases its session and retries plainly rather than relying on
-    // re-setup semantics of a half-configured object.
-    auto try_session = [&](bool with_diffmap) -> bool {
+    auto try_session = [&](bool with_diffmap, unsigned int adapter) -> bool {
       nvfbc_win::nvfbc_create_params_t params {};
       params.dwVersion = nvfbc_win::struct_version(sizeof(params), 2);
       params.dwInterfaceType = nvfbc_win::NVFBC_TO_DX9_VID;
-      params.dwAdapterIdx = adapter_idx;
+      params.dwAdapterIdx = adapter;
       params.pDevice = device;
       params.pPrivateData = key.data();
       params.dwPrivateDataSize = (nvfbc_win::nv_u32_t) key.size();
@@ -726,7 +746,12 @@ namespace platf::dxgi {
       return true;
     };
 
-    if (!try_session(true) && !try_session(false)) {
+    bool session_ok = try_session(true, adapter_idx) || try_session(false, adapter_idx);
+    if (!session_ok && adapter_idx != 0) {
+      BOOST_LOG(warning) << "NvFBC-Dx9 session failed on adapter "sv << adapter_idx << "; retrying default adapter"sv;
+      session_ok = try_session(true, 0) || try_session(false, 0);
+    }
+    if (!session_ok) {
       BOOST_LOG(error) << "NvFBC-Dx9: CreateEx/setup failed; on GeForce the unlock key was likely rejected (see NVFBC_PRIV_DATA). "
         "Sessions also cannot be created while an app is fullscreen on any head."sv;
       if (diff_buffer) {

@@ -72,8 +72,15 @@ Windows implementation:
   zero-copy Dx9Vid target is future work.
 - Factory order in `display_base.cpp`: explicit `capture=nvfbc` anywhere;
   autodetect tries DDX, then NvFBC, then WGC. New `nvfbc` option in the
-  Advanced tab (Windows). `display_names()` falls back to GDI enumeration
-  when NvFBC is available but duplication probing fails (Win7).
+  Advanced tab (Windows).
+- Display detection (finicky by nature, hardened): `display_names()` keeps the
+  DXGI duplication probe on 8+, and on pre-8 unconditionally appends
+  GDI-attached displays (deduplicated) so the UI never ends up with an empty
+  list — uncapturable ones fail later with a clear log. All three NvFBC inits
+  reject detached/stale display names up front via `EnumDisplayDevices`
+  (`display_is_attached`), resolve geometry strictly from GDI, map the
+  display to the NVIDIA adapter ordinal (DXGI) and the D3D9 adapter (HMONITOR
+  match, NVIDIA-only), and retry session creation on the default adapter.
 - Can NvFBC be used on Windows? Yes: the driver exports `NvFBC_CreateEx` /
   `GetStatusEx` / `Enable` from `%WINDIR%\System32\NvFBC64.dll`
   (`SysWOW64\NvFBC.dll` for 32-bit), one session per head, session created at

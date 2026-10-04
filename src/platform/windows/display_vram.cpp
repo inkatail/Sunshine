@@ -2224,6 +2224,10 @@ namespace platf::dxgi {
     DEVMODEW mode {};
     mode.dmSize = sizeof(mode);
     std::wstring wide_name = display_name.empty() ? std::wstring {} : utf_utils::from_utf8(display_name);
+    if (!display_name.empty() && !nvfbc_capture_t::display_is_attached(display_name)) {
+      BOOST_LOG(error) << "NvFBC: display ["sv << display_name << "] is not attached to the desktop"sv;
+      return -1;
+    }
     if (!EnumDisplaySettingsW(display_name.empty() ? nullptr : wide_name.c_str(), ENUM_CURRENT_SETTINGS, &mode)) {
       BOOST_LOG(error) << "NvFBC: failed to query display settings for ["sv << display_name << ']';
       return -1;
@@ -2405,6 +2409,10 @@ namespace platf::dxgi {
     DEVMODEW mode {};
     mode.dmSize = sizeof(mode);
     std::wstring wide_name = display_name.empty() ? std::wstring {} : utf_utils::from_utf8(display_name);
+    if (!display_name.empty() && !nvfbc_capture_t::display_is_attached(display_name)) {
+      BOOST_LOG(error) << "NvFBC: display ["sv << display_name << "] is not attached to the desktop"sv;
+      return -1;
+    }
     if (!EnumDisplaySettingsW(display_name.empty() ? nullptr : wide_name.c_str(), ENUM_CURRENT_SETTINGS, &mode)) {
       BOOST_LOG(error) << "NvFBC-Dx9: failed to query display settings for ["sv << display_name << ']';
       return -1;

@@ -3,6 +3,7 @@
  * @brief Definitions for the Windows display base code.
  */
 // standard includes
+#include <algorithm>
 #include <cmath>
 #include <thread>
 
@@ -1208,11 +1209,14 @@ namespace platf {
       MONITORINFOEXW info {};
       info.cbSize = sizeof(info);
       if (GetMonitorInfoW(monitor, &info)) {
-        // Only list monitors attached to the desktop.
+        // Only list monitors attached to the desktop, without duplicates.
         DISPLAY_DEVICEW device {};
         device.cb = sizeof(device);
         if (EnumDisplayDevicesW(info.szDevice, 0, &device, 0) && (device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) {
-          ctx->out->emplace_back(utf_utils::to_utf8(info.szDevice));
+          auto name = utf_utils::to_utf8(info.szDevice);
+          if (std::find(ctx->out->begin(), ctx->out->end(), name) == ctx->out->end()) {
+            ctx->out->emplace_back(std::move(name));
+          }
         }
       }
       return TRUE;
@@ -1283,9 +1287,15 @@ namespace platf {
     }
 
     // windows-legacy: on pre-8 systems the duplication probe above always fails,
-    // leaving the list empty. Fall back to GDI enumeration when NvFBC can
-    // capture, so Win7/NVIDIA systems still offer their displays.
-    if (display_names.empty() && dxgi::nvfbc_capture_t::available()) {
+    // leaving the list empty and the UI without any display to select. Append
+    // the GDI-attached displays (deduplicated) so selection works; backends
+    // that cannot capture still fail later with a clear log. On 8+ the DXGI
+    // list above already covers everything and this is skipped.
+    if (!win_legacy::is_win8_or_greater()) {
+      const bool nvfbc_ready = dxgi::nvfbc_capture_t::available();
+      if (!nvfbc_ready) {
+        BOOST_LOG(warning) << "No Desktop Duplication (needs 8+) and no NvFBC; listed displays may not be capturable on this Windows 7/Vista system"sv;
+      }
       nvfbc_monitor_enum_ctx_t ctx {&display_names};
       EnumDisplayMonitors(
         nullptr,

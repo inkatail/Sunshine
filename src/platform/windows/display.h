@@ -881,6 +881,17 @@ namespace platf::dxgi {
     static unsigned int adapter_index_for_display(const std::string &display_name);
 
     /**
+     * @brief Check whether a display is attached to the desktop.
+     *
+     * @details Guards against stale configuration naming a detached or
+     * non-existent display, which would otherwise capture garbage or fail
+     * deep inside session setup with a misleading error.
+     * @param display_name GDI display name, or empty (always attached).
+     * @return True when the display exists and is attached to the desktop.
+     */
+    static bool display_is_attached(const std::string &display_name);
+
+    /**
      * @brief Create an NvFBC ToSys session for the given adapter.
      *
      * @param adapter_idx NvFBC adapter ordinal.
