@@ -2,14 +2,28 @@
  * @file tools/dxgi.cpp
  * @brief Displays information about connected displays and GPUs
  */
-#define WINVER 0x0A00
+// windows-legacy: target Windows 7; resolve per-monitor-V2 DPI awareness at runtime.
+#define WINVER 0x0601
+#define _WIN32_WINNT 0x0601
 #include "src/platform/windows/utf_utils.h"
 #include "src/utility.h"
 
+#include <Windows.h>
 #include <d3dcommon.h>
 #include <dxgi.h>
 #include <format>
 #include <iostream>
+
+// windows-legacy: with WINVER=0x0601 the Win10 DPI-awareness-context constants are hidden.
+// Define them locally for the GetProcAddress path (values from winuser.h, Win10 1703+).
+#ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+  #define SUNSHINE_DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT) -4)
+#else
+  #define SUNSHINE_DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+#endif
+#ifndef DPI_AWARENESS_CONTEXT
+DECLARE_HANDLE(DPI_AWARENESS_CONTEXT);
+#endif
 
 using namespace std::literals;
 
@@ -25,8 +39,22 @@ namespace dxgi {
 }  // namespace dxgi
 
 int main(int argc, char *argv[]) {
-  // Set ourselves as per-monitor DPI aware for accurate resolution values on High DPI systems
-  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  // Set ourselves as per-monitor DPI aware for accurate resolution values on High DPI systems.
+  // windows-legacy: SetProcessDpiAwarenessContext is Win10 1703+. Resolve dynamically and
+  // fall back to SetProcessDPIAware (Vista+) so this tool still runs on 7/8.x.
+  {
+    using set_dpi_awareness_ctx_fn = BOOL(WINAPI *)(DPI_AWARENESS_CONTEXT);
+    auto user32 = LoadLibraryW(L"user32.dll");
+    auto fn = user32 ? reinterpret_cast<set_dpi_awareness_ctx_fn>(GetProcAddress(user32, "SetProcessDpiAwarenessContext")) : nullptr;
+    if (fn) {
+      fn(SUNSHINE_DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    } else {
+      SetProcessDPIAware();
+    }
+    if (user32) {
+      FreeLibrary(user32);
+    }
+  }
 
   dxgi::factory1_t::pointer factory_p {};
   const HRESULT status = CreateDXGIFactory1(IID_IDXGIFactory1, static_cast<void **>(static_cast<void *>(&factory_p)));

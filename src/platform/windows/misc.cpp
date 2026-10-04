@@ -47,6 +47,7 @@
 
 // local includes
 #include "misc.h"
+#include "os_version.h"
 #include "nvprefs/nvprefs_interface.h"
 #include "src/entry_handler.h"
 #include "src/globals.h"
@@ -72,6 +73,22 @@
    * @brief Macro for PROC THREAD ATTRIBUTE JOB LIST.
    */
   #define PROC_THREAD_ATTRIBUTE_JOB_LIST ProcThreadAttributeValue(13, FALSE, TRUE, FALSE)
+#endif
+
+// windows-legacy: CREATE_WAITABLE_TIMER_HIGH_RESOLUTION is Windows 10 1809+ and may be
+// missing from older SDKs. Win7/8.x reject the flag at runtime (fallback below handles it).
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+  /**
+   * @def SUNSHINE_CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+   * @brief Fallback value for CREATE_WAITABLE_TIMER_HIGH_RESOLUTION (0x00000002).
+   */
+  #define SUNSHINE_CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#else
+  /**
+   * @def SUNSHINE_CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+   * @brief Alias for CREATE_WAITABLE_TIMER_HIGH_RESOLUTION when the SDK provides it.
+   */
+  #define SUNSHINE_CREATE_WAITABLE_TIMER_HIGH_RESOLUTION CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #endif
 
 #include <qos2.h>
@@ -644,7 +661,14 @@ namespace platf {
       //
       // Note: The value we point to here must be valid for the lifetime of the attribute list,
       // so we take a HANDLE* instead of just a HANDLE to use the caller's stack storage.
-      UpdateProcThreadAttribute(startup_info.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, job, sizeof(*job), nullptr, nullptr);
+      //
+      // windows-legacy: PROC_THREAD_ATTRIBUTE_JOB_LIST requires Windows 8+. On 7/Vista
+      // UpdateProcThreadAttribute fails for this attribute, which would break process
+      // launch entirely, so skip job assignment downlevel (job tracking unavailable).
+      if (!UpdateProcThreadAttribute(startup_info.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, job, sizeof(*job), nullptr, nullptr)) {
+        auto err = GetLastError();
+        BOOST_LOG(warning) << "PROC_THREAD_ATTRIBUTE_JOB_LIST unavailable on this OS, job tracking disabled: "sv << err;
+      }
     }
 
     return startup_info;
@@ -1146,8 +1170,22 @@ namespace platf {
   }
 
   void set_thread_name(std::string_view name) {
+    // windows-legacy: SetThreadDescription is Win10 1607+. Resolve dynamically so the
+    // binary still starts on 7/8.x; failure is non-fatal (debugger thread names only).
+    using set_thread_description_fn = HRESULT(WINAPI *)(HANDLE, PCWSTR);
+    static set_thread_description_fn fn = nullptr;
+    static bool resolved = false;
+    if (!resolved) {
+      resolved = true;
+      if (auto kernel32 = GetModuleHandleW(L"kernel32.dll")) {
+        fn = reinterpret_cast<set_thread_description_fn>(GetProcAddress(kernel32, "SetThreadDescription"));
+      }
+    }
+    if (!fn) {
+      return;
+    }
     std::wstring wname = utf_utils::from_utf8(std::string {name});
-    HRESULT hr = SetThreadDescription(GetCurrentThread(), wname.c_str());
+    HRESULT hr = fn(GetCurrentThread(), wname.c_str());
     if (FAILED(hr)) {
       BOOST_LOG(error) << "SetThreadDescription failed: " << hr;
     }
@@ -1814,8 +1852,9 @@ namespace platf {
   class win32_high_precision_timer: public high_precision_timer {
   public:
     win32_high_precision_timer() {
-      // Use CREATE_WAITABLE_TIMER_HIGH_RESOLUTION if supported (Windows 10 1809+)
-      timer = CreateWaitableTimerEx(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+      // windows-legacy: high-resolution flag is Windows 10 1809+; Win7/8.x reject it,
+      // so try it first and fall back to a plain waitable timer.
+      timer = CreateWaitableTimerEx(nullptr, nullptr, SUNSHINE_CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
       if (!timer) {
         timer = CreateWaitableTimerEx(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
         if (!timer) {

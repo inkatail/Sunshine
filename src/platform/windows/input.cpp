@@ -3,7 +3,10 @@
  * @brief Definitions for input handling on Windows.
  */
 #ifndef DOXYGEN
-  #define WINVER 0x0A00
+  // windows-legacy: target Windows 7 (0x0601) so the binary does not require Win10 at load.
+  // Win10+ code paths must use GetProcAddress/QueryInterface guards, not static imports.
+  #define WINVER 0x0601
+  #define _WIN32_WINNT 0x0601
 #endif
 #ifdef DOXYGEN
   /**

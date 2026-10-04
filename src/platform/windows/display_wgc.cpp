@@ -8,6 +8,7 @@
 // local includes
 #include "display.h"
 #include "misc.h"
+#include "os_version.h"
 #include "src/logging.h"
 
 // Gross hack to work around MINGW-packages#22160
@@ -101,6 +102,12 @@ namespace platf::dxgi {
    * @return 0 on success, -1 on failure.
    */
   int wgc_capture_t::init(display_base_t *display, const ::video::config_t &config) {
+    // windows-legacy: fail fast pre-10 so Win7/8.x never touch WinRT activation.
+    if (!win_legacy::is_win10_or_greater()) {
+      BOOST_LOG(warning) << "Windows.Graphics.Capture requires Windows 10 or newer; WGC disabled on this OS"sv;
+      return -1;
+    }
+
     HRESULT status;
     dxgi::dxgi_t dxgi;
     winrt::com_ptr<::IInspectable> d3d_comhandle;

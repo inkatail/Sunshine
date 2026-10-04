@@ -21,6 +21,10 @@ option(SUNSHINE_ENABLE_TRAY "Enable system tray icon." ON)
 if(WIN32)
     option(SUNSHINE_USE_STATIC_QT
             "Require static Qt libraries and their static third-party dependencies." ON)
+    # windows-legacy: WGC (Windows.Graphics.Capture) requires Win10 1803+. Disable with
+    # -DSUNSHINE_ENABLE_WGC=OFF for Win7/8.x builds that must not link Windowsapp.lib.
+    option(SUNSHINE_ENABLE_WGC
+            "Enable Windows.Graphics.Capture backend (requires Windows 10+)." ON)
 endif()
 
 option(SUNSHINE_SYSTEM_VULKAN_HEADERS "Use system installation of vulkan-headers rather than the submodule." OFF)

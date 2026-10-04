@@ -66,12 +66,12 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/publish.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/os_version.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/input.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_base.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_vram.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_ram.cpp"
-        "${CMAKE_SOURCE_DIR}/src/platform/windows/display_wgc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/audio.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.h"
@@ -81,6 +81,14 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Util.h"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/km/BusShared.h"
         ${NVPREFS_FILES})
+
+# windows-legacy: WGC pulls WinRT headers + Windowsapp.lib (Win10+). Allow compiling it out.
+if(SUNSHINE_ENABLE_WGC)
+    list(APPEND PLATFORM_TARGET_FILES "${CMAKE_SOURCE_DIR}/src/platform/windows/display_wgc.cpp")
+else()
+    add_compile_definitions(SUNSHINE_NO_WGC)
+    message(STATUS "SUNSHINE_ENABLE_WGC=OFF: Windows.Graphics.Capture backend disabled (Win7/8.x build)")
+endif()
 
 set(OPENSSL_LIBRARIES
         libssl.a

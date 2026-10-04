@@ -12,7 +12,11 @@
 #include <dxgi.h>
 #include <dxgi1_6.h>
 #include <Unknwn.h>
-#include <winrt/windows.graphics.capture.h>
+// windows-legacy: WinRT WGC headers require Win10 SDK + cppwinrt and Windowsapp.lib.
+// Excluded when built with -DSUNSHINE_ENABLE_WGC=OFF (Win7/8.x builds).
+#ifndef SUNSHINE_NO_WGC
+  #include <winrt/windows.graphics.capture.h>
+#endif
 
 // local includes
 #include "src/platform/common.h"
@@ -706,7 +710,9 @@ namespace platf::dxgi {
 
   /**
    * Display duplicator that uses the Windows.Graphics.Capture API.
+   * windows-legacy: excluded when built with SUNSHINE_NO_WGC (Win7/8.x builds).
    */
+#ifndef SUNSHINE_NO_WGC
   class wgc_capture_t {
     winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice uwp_device {nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item {nullptr};
@@ -820,4 +826,5 @@ namespace platf::dxgi {
      */
     capture_e release_snapshot() override;
   };
+#endif  // SUNSHINE_NO_WGC
 }  // namespace platf::dxgi

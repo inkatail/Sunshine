@@ -41,6 +41,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 
 #include "display.h"
 #include "misc.h"
+#include "os_version.h"
 #include "src/config.h"
 #include "src/display_device.h"
 #include "src/logging.h"
@@ -58,6 +59,15 @@ namespace platf::dxgi {
    * DDAPI-specific initialization goes here.
    */
   int duplication_t::init(display_base_t *display, const ::video::config_t &config) {
+    // windows-legacy: Desktop Duplication (IDXGIOutput1::DuplicateOutput) only exists on
+    // Windows 8+. On 7/Vista there is no IDXGIOutput1 duplication; fail fast here so the
+    // caller can fall through to another backend (GDI/NvFBC in the future) instead of
+    // emitting misleading DuplicateOutput errors.
+    if (!win_legacy::is_win8_or_greater()) {
+      BOOST_LOG(warning) << "Desktop Duplication API requires Windows 8 or newer; skipping DDX on this OS"sv;
+      return -1;
+    }
+
     HRESULT status;
 
     // Capture format will be determined from the first call to AcquireNextFrame()
@@ -366,6 +376,12 @@ namespace platf::dxgi {
    * @return True when Desktop Duplication can capture the requested output.
    */
   bool test_dxgi_duplication(adapter_t &adapter, output_t &output, bool enumeration_only) {
+    // windows-legacy: avoid even probing DuplicateOutput on Win7/Vista. The QI for
+    // IDXGIOutput1 succeeds on some Win7 drivers but DuplicateOutput always fails.
+    if (!win_legacy::is_win8_or_greater()) {
+      return false;
+    }
+
     D3D_FEATURE_LEVEL featureLevels[] {
       D3D_FEATURE_LEVEL_11_1,
       D3D_FEATURE_LEVEL_11_0,
@@ -468,10 +484,15 @@ namespace platf::dxgi {
       }
 
       {
-        // We aren't calling MH_Uninitialize(), but that's okay because this hook lasts for the life of the process
-        MH_Initialize();
-        MH_CreateHookApi(L"win32u.dll", "NtGdiDdDDIGetCachedHybridQueryValue", (void *) NtGdiDdDDIGetCachedHybridQueryValueHook, nullptr);
-        MH_EnableHook(MH_ALL_HOOKS);
+        // windows-legacy: win32u.dll only exists on Windows 10+. Skip the hybrid-GPU
+        // hook on 7/8.x; output reparenting workaround is Win10-specific.
+        if (win_legacy::is_win10_or_greater()) {
+          // We aren't calling MH_Uninitialize(), but that's okay because this hook lasts for the life of the process
+          MH_Initialize();
+          if (MH_CreateHookApi(L"win32u.dll", "NtGdiDdDDIGetCachedHybridQueryValue", (void *) NtGdiDdDDIGetCachedHybridQueryValueHook, nullptr) == MH_OK) {
+            MH_EnableHook(MH_ALL_HOOKS);
+          }
+        }
       }
     });
 
@@ -1016,7 +1037,26 @@ namespace platf {
    * @param hwdevice_type enables possible use of hardware encoder
    */
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
-    if (config::video.capture == "ddx" || config::video.capture.empty()) {
+    // windows-legacy: gate capture backends by real OS version.
+    // - DDX needs Win8+ (IDXGIOutput1::DuplicateOutput).
+    // - WGC needs Win10+ (Windows.Graphics.Capture). It can also be compiled out
+    //   with -DSUNSHINE_ENABLE_WGC=OFF for Win7 builds that must not link Windowsapp.lib.
+    const bool ddx_allowed = win_legacy::is_win8_or_greater();
+    const bool wgc_allowed = win_legacy::is_win10_or_greater();
+#ifndef SUNSHINE_NO_WGC
+    constexpr bool wgc_compiled = true;
+#else
+    constexpr bool wgc_compiled = false;
+#endif
+
+    if (!ddx_allowed) {
+      BOOST_LOG(warning) << "Desktop Duplication capture is unavailable on Windows 7/Vista; DDX backend disabled"sv;
+    }
+    if (!wgc_allowed || !wgc_compiled) {
+      BOOST_LOG(debug) << "Windows.Graphics.Capture backend disabled (allowed="sv << wgc_allowed << ", compiled="sv << wgc_compiled << ')';
+    }
+
+    if ((config::video.capture == "ddx" || config::video.capture.empty()) && ddx_allowed) {
       if (hwdevice_type == mem_type_e::dxgi) {
         auto disp = std::make_shared<dxgi::display_ddup_vram_t>();
 
@@ -1032,7 +1072,8 @@ namespace platf {
       }
     }
 
-    if (config::video.capture == "wgc" || config::video.capture.empty()) {
+    if ((config::video.capture == "wgc" || config::video.capture.empty()) && wgc_allowed && wgc_compiled) {
+#ifndef SUNSHINE_NO_WGC
       if (hwdevice_type == mem_type_e::dxgi) {
         auto disp = std::make_shared<dxgi::display_wgc_vram_t>();
 
@@ -1046,9 +1087,15 @@ namespace platf {
           return disp;
         }
       }
+#endif
     }
 
-    // ddx and wgc failed
+    // ddx and wgc failed (or were disabled by OS version on windows-legacy branch)
+    // NOTE windows-legacy: on Windows 7 both backends are unavailable by design:
+    // DDX requires 8+, WGC requires 10+. NVIDIA users will use a future NvFBC-for-Windows
+    // backend (the bundled third-party/nvfbc/NvFBC.h is Linux-only and
+    // src/platform/linux/cuda.cpp is X11/CUDA-specific, so it cannot be reused as-is);
+    // AMD/Intel users will need a future GDI fallback. See docs/windows-legacy.md.
     return nullptr;
   }
 
