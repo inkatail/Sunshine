@@ -201,6 +201,66 @@ function Write-LogFile {
     }
 }
 
+# windows-legacy: legacy OS prerequisite checks.
+# Verifies the Windows version floor (6.1+), Windows PowerShell version,
+# .NET Framework 4.8 (not inbox on Win7/8.x), and the Universal CRT
+# (KB2999226 on Win7/8.x). Missing items warn with download locations;
+# an unsupported OS or PowerShell aborts the install with a clear message.
+function Test-LegacyPrerequisites {
+    # This script uses Write-Information/Write-Progress (PowerShell 5+).
+    # Stock Windows 7 ships PowerShell 2.0; WMF 5.1 is required there.
+    if ($PSVersionTable.PSVersion.Major -lt 3) {
+        Write-Warning "Sunshine setup requires Windows PowerShell 3.0 or newer."
+        Write-Warning "On Windows 7, install Windows Management Framework 5.1 first: https://aka.ms/wmf5download"
+        exit 1
+    }
+
+    # OS floor: Windows 7 / Server 2008 R2 (6.1) or newer.
+    try {
+        $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop
+        $versionParts = $os.Version.Split('.')
+        $major = [int]$versionParts[0]
+        $minor = [int]$versionParts[1]
+        $isSupported = ($major -gt 6) -or ($major -eq 6 -and $minor -ge 1)
+        if (-not $isSupported) {
+            Write-Warning "Sunshine requires Windows 7 or newer. Detected: $($os.Caption) ($($os.Version)). Aborting."
+            exit 1
+        }
+        Write-LogMessage -Message "Detected OS: $($os.Caption) ($($os.Version))" -Level "Information"
+    } catch {
+        Write-LogMessage -Message "Could not determine OS version, continuing anyway: $($_.Exception.Message)" -Level "Warning"
+    }
+
+    # .NET Framework 4.8+: release DWORD >= 528040 under NDP\v4\Full.
+    # Not preinstalled on Windows 7/8.x; some Sunshine components expect it.
+    try {
+        $release = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' -Name Release -ErrorAction Stop).Release
+        if ($release -lt 528040) {
+            Write-LogMessage -Message ".NET Framework 4.8 or newer was not detected (release $release). Install it from https://dotnet.microsoft.com/download/dotnet-framework" -Level "Warning"
+        } else {
+            Write-LogMessage -Message ".NET Framework release detected: $release" -Level "Information"
+        }
+    } catch {
+        Write-LogMessage -Message ".NET Framework 4.8 or newer was not detected. Install it from https://dotnet.microsoft.com/download/dotnet-framework" -Level "Warning"
+    }
+
+    # Universal CRT: inbox on Windows 10+, update KB2999226 on 7/8.x.
+    # MinGW builds link the C++ runtime statically but still need the OS UCRT.
+    $ucrt = Join-Path $env:SystemRoot 'System32\ucrtbase.dll'
+    if (-not (Test-Path $ucrt)) {
+        Write-LogMessage -Message "Universal CRT (ucrtbase.dll) was not found. On Windows 7/8.x install update KB2999226, see https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment" -Level "Warning"
+    } else {
+        Write-LogMessage -Message "Universal CRT detected." -Level "Information"
+    }
+
+    # Visual C++ redistributable: only relevant for MSVC builds.
+    # MinGW (-static) builds do not need it; MSVC builds need the matching VC redist.
+    $vcRuntime = Join-Path $env:SystemRoot 'System32\vcruntime140.dll'
+    if (-not (Test-Path $vcRuntime)) {
+        Write-LogMessage -Message "VC++ runtime (vcruntime140.dll) was not found. MSVC builds require the Visual C++ Redistributable; MinGW static builds do not." -Level "Information"
+    }
+}
+
 # If Action is not provided, prompt the user
 if (-not $Action) {
     Write-Information ""
@@ -286,8 +346,19 @@ if ($Action -eq "install") {
         -Color "Yellow"
     Write-Information ""
 
-    $totalSteps = 6
+    $totalSteps = 7
     $currentStep = 0
+
+    # windows-legacy: OS / .NET 4.8 / UCRT prerequisite checks for Win7/8.x.
+    $currentStep++
+    Write-Progress `
+        -Activity "Installing Sunshine" `
+        -Status "Checking prerequisites" `
+        -PercentComplete (($currentStep / $totalSteps) * 100)
+    Write-LogMessage -Message "🔍 Checking prerequisites (.NET 4.8, Universal CRT, OS version)" -Level "Step"
+    Test-LegacyPrerequisites
+    Write-LogMessage -Message "  ✓ Done" -Level "Success"
+    Write-Information ""
 
     # Reset permissions on the install directory
     $currentStep++

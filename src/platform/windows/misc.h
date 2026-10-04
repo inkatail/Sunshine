@@ -11,7 +11,7 @@
 #include <string_view>
 
 // platform includes
-#include <Windows.h>
+#include <windows.h>
 #include <winnt.h>
 
 namespace platf {

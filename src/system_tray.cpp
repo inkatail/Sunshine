@@ -38,7 +38,7 @@
      */
     #define WIN32_LEAN_AND_MEAN
     #include <AccCtrl.h>
-    #include <AclAPI.h>
+    #include <aclapi.h>
   #elif defined(__APPLE__) || defined(__MACH__)
     #include <CoreFoundation/CoreFoundation.h>
     #include <dispatch/dispatch.h>

@@ -15,7 +15,7 @@
 
 #ifdef _WIN32
   // platform includes
-  #include <Windows.h>
+  #include <windows.h>
 #endif
 
 #if defined(__APPLE__) && defined(__MACH__)

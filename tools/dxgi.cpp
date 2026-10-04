@@ -8,7 +8,7 @@
 #include "src/platform/windows/utf_utils.h"
 #include "src/utility.h"
 
-#include <Windows.h>
+#include <windows.h>
 #include <d3dcommon.h>
 #include <dxgi.h>
 #include <format>
@@ -48,6 +48,15 @@ int main(int argc, char *argv[]) {
     auto fn = user32 ? reinterpret_cast<set_dpi_awareness_ctx_fn>(GetProcAddress(user32, "SetProcessDpiAwarenessContext")) : nullptr;
     if (fn) {
       fn(SUNSHINE_DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    } else if (auto shcore = LoadLibraryW(L"shcore.dll")) {
+      // windows-legacy: 8.1 per-monitor awareness when the V2 context is missing.
+      using shcore_set_awareness_fn = HRESULT(WINAPI *)(int value);
+      if (auto g = reinterpret_cast<shcore_set_awareness_fn>(GetProcAddress(shcore, "SetProcessDpiAwareness"))) {
+        g(2 /*PROCESS_PER_MONITOR_DPI_AWARE*/);
+      } else {
+        SetProcessDPIAware();
+      }
+      FreeLibrary(shcore);
     } else {
       SetProcessDPIAware();
     }

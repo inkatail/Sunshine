@@ -32,7 +32,7 @@
 #include <cstdint>
 
 #ifdef _WIN32
-  #include <Windows.h>
+  #include <windows.h>
 #endif
 
 // The version-specific namespace is populated by the SDK headers included below.

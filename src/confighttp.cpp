@@ -36,7 +36,7 @@
   #include "platform/windows/misc.h"
   #include "platform/windows/utf_utils.h"
 
-  #include <Windows.h>
+  #include <windows.h>
 #elif defined(__APPLE__)
   #include "platform/macos/misc.h"
 

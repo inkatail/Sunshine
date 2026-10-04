@@ -2250,6 +2250,12 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             @note{Applies to Windows only.}
             @attention{This capture method is not compatible with the Sunshine service.}</td>
     </tr>
+    <tr>
+        <td>nvfbc</td>
+        <td>Use NVIDIA Framebuffer Capture (GameStream-era path) to capture the display. Works on Windows 7 and newer
+            with NVIDIA drivers; on GeForce it needs the unlock key (see NVFBC_PRIV_DATA in the windows-legacy docs).
+            @note{Applies to Windows only on the windows-legacy branch; the Linux NvFBC entry above is separate.}</td>
+    </tr>
 </table>
 
 ### encoder

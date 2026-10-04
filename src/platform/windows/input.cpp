@@ -17,7 +17,7 @@
 #endif
 
 // platform includes
-#include <Windows.h>
+#include <windows.h>
 
 // standard includes
 #include <memory>

@@ -9,7 +9,7 @@
 #include <utility>
 
 // platform includes
-#include <Audioclient.h>
+#include <audioclient.h>
 #include <avrt.h>
 #include <mmdeviceapi.h>
 #include <newdev.h>

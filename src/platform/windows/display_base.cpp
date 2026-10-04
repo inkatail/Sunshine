@@ -366,6 +366,91 @@ namespace platf::dxgi {
     return capture_e::ok;
   }
 
+  HRESULT d3d11_create_device_retry(IDXGIAdapter *adapter, UINT flags, ID3D11Device **device, D3D_FEATURE_LEVEL *out_level, ID3D11DeviceContext **device_ctx) {
+    // windows-legacy: full level list first (11_1 needs Win8 or Win7+KB2670838).
+    static const D3D_FEATURE_LEVEL full_levels[] {
+      D3D_FEATURE_LEVEL_11_1,
+      D3D_FEATURE_LEVEL_11_0,
+      D3D_FEATURE_LEVEL_10_1,
+      D3D_FEATURE_LEVEL_10_0,
+      D3D_FEATURE_LEVEL_9_3,
+      D3D_FEATURE_LEVEL_9_2,
+      D3D_FEATURE_LEVEL_9_1
+    };
+    // Same list without 11_1 for pre-platform-update Windows 7.
+    static const D3D_FEATURE_LEVEL legacy_levels[] {
+      D3D_FEATURE_LEVEL_11_0,
+      D3D_FEATURE_LEVEL_10_1,
+      D3D_FEATURE_LEVEL_10_0,
+      D3D_FEATURE_LEVEL_9_3,
+      D3D_FEATURE_LEVEL_9_2,
+      D3D_FEATURE_LEVEL_9_1
+    };
+
+    auto status = D3D11CreateDevice(
+      adapter,
+      D3D_DRIVER_TYPE_UNKNOWN,
+      nullptr,
+      flags,
+      full_levels,
+      ARRAYSIZE(full_levels),
+      D3D11_SDK_VERSION,
+      device,
+      out_level,
+      device_ctx
+    );
+    if (status != E_INVALIDARG) {
+      return status;
+    }
+
+    // Unknown feature level or flag for this runtime; drop 11_1 and retry.
+    status = D3D11CreateDevice(
+      adapter,
+      D3D_DRIVER_TYPE_UNKNOWN,
+      nullptr,
+      flags,
+      legacy_levels,
+      ARRAYSIZE(legacy_levels),
+      D3D11_SDK_VERSION,
+      device,
+      out_level,
+      device_ctx
+    );
+    if (status != E_INVALIDARG || !(flags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
+      return status;
+    }
+
+    // Pre-8 runtime rejecting VIDEO_SUPPORT; retry without it.
+    const UINT plain_flags = flags & (UINT) ~D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+    status = D3D11CreateDevice(
+      adapter,
+      D3D_DRIVER_TYPE_UNKNOWN,
+      nullptr,
+      plain_flags,
+      full_levels,
+      ARRAYSIZE(full_levels),
+      D3D11_SDK_VERSION,
+      device,
+      out_level,
+      device_ctx
+    );
+    if (status != E_INVALIDARG) {
+      return status;
+    }
+    return D3D11CreateDevice(
+      adapter,
+      D3D_DRIVER_TYPE_UNKNOWN,
+      nullptr,
+      plain_flags,
+      legacy_levels,
+      ARRAYSIZE(legacy_levels),
+      D3D11_SDK_VERSION,
+      device,
+      out_level,
+      device_ctx
+    );
+  }
+
   /**
    * @brief Tests to determine if the Desktop Duplication API can capture the given output.
    * @details When testing for enumeration only, we avoid resyncing the thread desktop.
@@ -382,29 +467,9 @@ namespace platf::dxgi {
       return false;
     }
 
-    D3D_FEATURE_LEVEL featureLevels[] {
-      D3D_FEATURE_LEVEL_11_1,
-      D3D_FEATURE_LEVEL_11_0,
-      D3D_FEATURE_LEVEL_10_1,
-      D3D_FEATURE_LEVEL_10_0,
-      D3D_FEATURE_LEVEL_9_3,
-      D3D_FEATURE_LEVEL_9_2,
-      D3D_FEATURE_LEVEL_9_1
-    };
-
     device_t device;
-    auto status = D3D11CreateDevice(
-      adapter.get(),
-      D3D_DRIVER_TYPE_UNKNOWN,
-      nullptr,
-      D3D11_CREATE_DEVICE_FLAGS,
-      featureLevels,
-      sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
-      D3D11_SDK_VERSION,
-      &device,
-      nullptr,
-      nullptr
-    );
+    // Probe device via the retry helper so Win7 without KB2670838 is handled.
+    auto status = d3d11_create_device_retry(adapter.get(), D3D11_CREATE_DEVICE_FLAGS, &device, nullptr, nullptr);
     if (FAILED(status)) {
       BOOST_LOG(error) << "Failed to create D3D11 device for DD test [0x"sv << util::hex(status).to_string_view() << ']';
       return false;
@@ -478,6 +543,16 @@ namespace platf::dxgi {
         auto f = (User32_SetProcessDpiAwarenessContext) GetProcAddress(user32, "SetProcessDpiAwarenessContext");
         if (f) {
           f(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        } else {
+          // windows-legacy: 8.1 shcore.dll per-monitor awareness when the
+          // Win10 V2 context is unavailable.
+          using shcore_set_awareness_fn = HRESULT(WINAPI *)(int value);
+          if (auto shcore = LoadLibraryA("shcore.dll")) {
+            if (auto g = (shcore_set_awareness_fn) GetProcAddress(shcore, "SetProcessDpiAwareness")) {
+              g(2 /*PROCESS_PER_MONITOR_DPI_AWARE*/);
+            }
+            FreeLibrary(shcore);
+          }
         }
 
         FreeLibrary(user32);
@@ -582,30 +657,16 @@ namespace platf::dxgi {
       return -1;
     }
 
-    D3D_FEATURE_LEVEL featureLevels[] {
-      D3D_FEATURE_LEVEL_11_1,
-      D3D_FEATURE_LEVEL_11_0,
-      D3D_FEATURE_LEVEL_10_1,
-      D3D_FEATURE_LEVEL_10_0,
-      D3D_FEATURE_LEVEL_9_3,
-      D3D_FEATURE_LEVEL_9_2,
-      D3D_FEATURE_LEVEL_9_1
-    };
-
     status = adapter->QueryInterface(IID_IDXGIAdapter, (void **) &adapter_p);
     if (FAILED(status)) {
       BOOST_LOG(error) << "Failed to query IDXGIAdapter interface"sv;
       return -1;
     }
 
-    status = D3D11CreateDevice(
+    // windows-legacy: retry helper drops 11_1 / VIDEO_SUPPORT on old runtimes.
+    status = d3d11_create_device_retry(
       adapter_p,
-      D3D_DRIVER_TYPE_UNKNOWN,
-      nullptr,
       D3D11_CREATE_DEVICE_FLAGS,
-      featureLevels,
-      sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
-      D3D11_SDK_VERSION,
       &device,
       &feature_level,
       &device_ctx
@@ -1072,6 +1133,25 @@ namespace platf {
       }
     }
 
+    // windows-legacy: NvFBC ToSys is the GameStream-era path for NVIDIA on
+    // Windows 7 (no DDX/WGC there). Explicit "nvfbc" selects it anywhere;
+    // autodetect tries it after DDX and before WGC.
+    if (config::video.capture == "nvfbc" || config::video.capture.empty()) {
+      if (hwdevice_type == mem_type_e::dxgi) {
+        auto disp = std::make_shared<dxgi::display_nvfbc_vram_t>();
+
+        if (!disp->init(config, display_name)) {
+          return disp;
+        }
+      } else if (hwdevice_type == mem_type_e::system) {
+        auto disp = std::make_shared<dxgi::display_nvfbc_ram_t>();
+
+        if (!disp->init(config, display_name)) {
+          return disp;
+        }
+      }
+    }
+
     if ((config::video.capture == "wgc" || config::video.capture.empty()) && wgc_allowed && wgc_compiled) {
 #ifndef SUNSHINE_NO_WGC
       if (hwdevice_type == mem_type_e::dxgi) {
@@ -1090,18 +1170,46 @@ namespace platf {
 #endif
     }
 
-    // ddx and wgc failed (or were disabled by OS version on windows-legacy branch)
-    // NOTE windows-legacy: on Windows 7 both backends are unavailable by design:
-    // DDX requires 8+, WGC requires 10+. NVIDIA users will use a future NvFBC-for-Windows
-    // backend (the bundled third-party/nvfbc/NvFBC.h is Linux-only and
-    // src/platform/linux/cuda.cpp is X11/CUDA-specific, so it cannot be reused as-is);
-    // AMD/Intel users will need a future GDI fallback. See docs/windows-legacy.md.
+    // ddx, nvfbc and wgc failed (or were disabled by OS version on windows-legacy branch)
+    // NOTE windows-legacy: on Windows 7 DDX requires 8+ and WGC requires 10+,
+    // so NVIDIA systems fall back to the NvFBC backend above. AMD/Intel on 7
+    // still need a future GDI fallback. See docs/windows-legacy.md.
     return nullptr;
   }
 
+  namespace {
+    /**
+     * @brief Context for GDI monitor enumeration on legacy systems.
+     */
+    struct nvfbc_monitor_enum_ctx_t {
+      std::vector<std::string> *out;  ///< Collected display names.
+    };
+
+    /**
+     * @brief MonitorEnumProc callback collecting attached displays.
+     *
+     * @param monitor Monitor handle being enumerated.
+     * @param lparam Opaque pointer to `nvfbc_monitor_enum_ctx_t`.
+     * @return TRUE to continue enumeration.
+     */
+    BOOL CALLBACK enum_nvfbc_monitor_callback(HMONITOR monitor, HDC, LPRECT, LPARAM lparam) {
+      auto *ctx = reinterpret_cast<nvfbc_monitor_enum_ctx_t *>(lparam);
+      MONITORINFOEXW info {};
+      info.cbSize = sizeof(info);
+      if (GetMonitorInfoW(monitor, &info)) {
+        // Only list monitors attached to the desktop.
+        DISPLAY_DEVICEW device {};
+        device.cb = sizeof(device);
+        if (EnumDisplayDevicesW(info.szDevice, 0, &device, 0) && (device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) {
+          ctx->out->emplace_back(utf_utils::to_utf8(info.szDevice));
+        }
+      }
+      return TRUE;
+    }
+  }  // namespace
+
   std::vector<std::string> display_names(mem_type_e) {
     std::vector<std::string> display_names;
-
     HRESULT status;
 
     BOOST_LOG(debug) << "Detecting monitors..."sv;
@@ -1161,6 +1269,19 @@ namespace platf {
           display_names.emplace_back(std::move(device_name));
         }
       }
+    }
+
+    // windows-legacy: on pre-8 systems the duplication probe above always fails,
+    // leaving the list empty. Fall back to GDI enumeration when NvFBC can
+    // capture, so Win7/NVIDIA systems still offer their displays.
+    if (display_names.empty() && dxgi::nvfbc_capture_t::available()) {
+      nvfbc_monitor_enum_ctx_t ctx {&display_names};
+      EnumDisplayMonitors(
+        nullptr,
+        nullptr,
+        enum_nvfbc_monitor_callback,
+        reinterpret_cast<LPARAM>(&ctx)
+      );
     }
 
     return display_names;

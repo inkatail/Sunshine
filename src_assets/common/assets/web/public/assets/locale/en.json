@@ -169,7 +169,7 @@
     "bind_address": "Bind address",
     "bind_address_desc": "Set an IP address that exists on this host. An IPv4 address works with either address-family mode; an IPv6 address requires dual-stack mode. If left blank, Sunshine will bind to all available addresses for the configured address family.",
     "capture": "Force a Specific Capture Method",
-    "capture_desc": "On automatic mode Sunshine will use the first one that works. NvFBC requires patched nvidia drivers.",
+    "capture_desc": "On automatic mode Sunshine will use the first one that works. NvFBC requires patched nvidia drivers on Linux, or the unlock key (NVFBC_PRIV_DATA) on GeForce Windows systems.",
     "category_advanced": "Advanced",
     "category_amd_amf_encoder": "AMD AMF Encoder",
     "category_audio_video": "Audio/Video",

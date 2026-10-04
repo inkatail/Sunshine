@@ -39,3 +39,15 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 
 # WIN32 is set automatically from CMAKE_SYSTEM_NAME; keep GNU binding checks host-side.
 set(CMAKE_CROSSCOMPILING_EMULATOR "")
+
+# windows-legacy: prefer the mingw pkg-config wrapper (AUR mingw-w64-pkg-config)
+# so find_package(PkgConfig)/pkg_check_modules resolve cross libs, not host libs.
+find_program(MINGW_PKG_CONFIG x86_64-w64-mingw32-pkg-config)
+if(MINGW_PKG_CONFIG)
+    set(PKG_CONFIG_EXECUTABLE "${MINGW_PKG_CONFIG}" CACHE FILEPATH "pkg-config for MinGW cross")
+    set(ENV{PKG_CONFIG_PATH} "/usr/x86_64-w64-mingw32/lib/pkgconfig")
+    set(ENV{PKG_CONFIG_LIBDIR} "/usr/x86_64-w64-mingw32/lib/pkgconfig")
+endif()
+
+# Node/npm for the web-ui are always host tools (never Windows npm.cmd).
+find_program(HOST_NPM npm REQUIRED)

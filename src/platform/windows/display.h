@@ -11,7 +11,7 @@
 #include <dwmapi.h>
 #include <dxgi.h>
 #include <dxgi1_6.h>
-#include <Unknwn.h>
+#include <unknwn.h>
 // windows-legacy: WinRT WGC headers require Win10 SDK + cppwinrt and Windowsapp.lib.
 // Excluded when built with -DSUNSHINE_ENABLE_WGC=OFF (Win7/8.x builds).
 #ifndef SUNSHINE_NO_WGC
@@ -39,6 +39,22 @@ namespace platf::dxgi {
   void Release(T *dxgi) {
     dxgi->Release();
   }
+
+  /**
+   * @brief Create a D3D11 device with downlevel fallbacks.
+   *
+   * @details windows-legacy: vanilla Windows 7 (without KB2670838) rejects
+   * `D3D_FEATURE_LEVEL_11_1`, and pre-8 runtimes reject
+   * `D3D11_CREATE_DEVICE_VIDEO_SUPPORT`, both with `E_INVALIDARG`. This helper
+   * retries without them so the same binary runs on 7/8.x and 10+.
+   * @param adapter DXGI adapter to create the device on, or null for default.
+   * @param flags D3D11 creation flags.
+   * @param device Created device on success.
+   * @param out_level Negotiated feature level on success.
+   * @param device_ctx Immediate device context on success (may be null).
+   * @return `S_OK` on success, else the last D3D11 failure.
+   */
+  HRESULT d3d11_create_device_retry(IDXGIAdapter *adapter, UINT flags, ID3D11Device **device, D3D_FEATURE_LEVEL *out_level, ID3D11DeviceContext **device_ctx);
 
   /**
    * @brief Owning COM pointer for the DXGI factory used to enumerate adapters.
@@ -827,4 +843,179 @@ namespace platf::dxgi {
     capture_e release_snapshot() override;
   };
 #endif  // SUNSHINE_NO_WGC
+
+  /**
+   * Display capture that uses NVIDIA Framebuffer Capture (NvFBC) on Windows.
+   *
+   * @details windows-legacy: NvFBC is the GameStream-era capture path that works
+   * on Windows 7, where Desktop Duplication (8+) and Windows.Graphics.Capture
+   * (10+) are unavailable. The driver DLL (`NvFBC64.dll` / `NvFBC.dll`) is
+   * loaded at runtime; nothing here links against NVIDIA at build time.
+   * The ToSys target delivers ARGB frames to system memory with the HW cursor
+   * composited, matching `B8G8R8A8_UNORM`.
+   */
+  class nvfbc_capture_t {
+  public:
+    nvfbc_capture_t();
+    ~nvfbc_capture_t();
+
+    nvfbc_capture_t(const nvfbc_capture_t &) = delete;
+    nvfbc_capture_t &operator=(const nvfbc_capture_t &) = delete;
+
+    /**
+     * @brief Check whether NvFBC capture is usable on this system.
+     *
+     * @details Loads the driver DLL once per process, enables NvFBC, and
+     * queries `bIsCapturePossible`. Safe to call on non-NVIDIA systems.
+     * @return True when an NvFBC session can be created.
+     */
+    static bool available();
+
+    /**
+     * @brief Map a GDI display name to the NvFBC adapter ordinal.
+     *
+     * @param display_name GDI display name (e.g. `\\\\.\\DISPLAY1`), or empty for default.
+     * @return NVIDIA adapter ordinal, or 0 when mapping fails.
+     */
+    static unsigned int adapter_index_for_display(const std::string &display_name);
+
+    /**
+     * @brief Create an NvFBC ToSys session for the given adapter.
+     *
+     * @param adapter_idx NvFBC adapter ordinal.
+     * @param width Desktop width used for the session (informational).
+     * @param height Desktop height used for the session (informational).
+     * @return 0 on success; -1 when the session cannot be created.
+     */
+    int init(unsigned int adapter_idx, int width, int height);
+    /**
+     * @brief Grab the next desktop frame into the session buffer.
+     *
+     * @param timeout Maximum time to wait for a new frame.
+     * @return Capture status for the grab attempt.
+     */
+    capture_e grab(std::chrono::milliseconds timeout);
+    /**
+     * @brief Release the NvFBC session.
+     *
+     * @return Capture status after releasing the session.
+     */
+    capture_e release_session();
+
+    /**
+     * @brief Access the latest grabbed frame buffer (ARGB, driver-owned).
+     *
+     * @return Pointer to the frame bytes, valid until the next grab/release.
+     */
+    const std::uint8_t *frame_buffer() const {
+      return frame_bytes;
+    }
+
+    /**
+     * @brief Padded frame-buffer width reported by the last grab.
+     *
+     * @return Stride in pixels between the starts of consecutive rows.
+     */
+    unsigned int buffer_stride_pixels() const {
+      return buffer_stride;
+    }
+
+    /**
+     * @brief Desktop width reported by the last grab.
+     *
+     * @return Captured desktop width in pixels.
+     */
+    unsigned int frame_width() const {
+      return last_width;
+    }
+
+    /**
+     * @brief Desktop height reported by the last grab.
+     *
+     * @return Captured desktop height in pixels.
+     */
+    unsigned int frame_height() const {
+      return last_height;
+    }
+
+  private:
+    void *session = nullptr;  ///< NvFBC ToSys interface object from CreateEx.
+    void *buffer_storage = nullptr;  ///< Driver-owned frame buffer from ToSys setup.
+    const std::uint8_t *frame_bytes = nullptr;  ///< Latest grabbed frame bytes.
+    unsigned int buffer_stride = 0;  ///< Padded buffer stride in pixels.
+    unsigned int last_width = 0;  ///< Desktop width from the last grab.
+    unsigned int last_height = 0;  ///< Desktop height from the last grab.
+    bool initialized = false;  ///< Session is active.
+  };
+
+  /**
+   * Display backend that uses NvFBC ToSys with a software encoder.
+   */
+  class display_nvfbc_ram_t: public display_ram_t {
+    nvfbc_capture_t session;
+
+  public:
+    /**
+     * @brief Initialize NvFBC capture for the selected display.
+     *
+     * @param config Configuration values to apply.
+     * @param display_name Display name.
+     * @return 0 on success; nonzero or negative platform status on failure.
+     */
+    int init(const ::video::config_t &config, const std::string &display_name);
+    /**
+     * @brief Capture a display frame into the provided image object.
+     *
+     * @param pull_free_image_cb Callback that provides an available image buffer.
+     * @param img_out Captured image buffer returned to the streaming pipeline.
+     * @param timeout Maximum time to wait for the operation.
+     * @param cursor_visible Cursor visibility (cursor is composited by NvFBC).
+     * @return Capture status reported to the streaming pipeline.
+     */
+    capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) override;
+    /**
+     * @brief Release resources associated with the last captured snapshot.
+     *
+     * @return Capture status after releasing the current snapshot.
+     */
+    capture_e release_snapshot() override;
+  };
+
+  /**
+   * Display backend that uses NvFBC ToSys with a hardware encoder.
+   *
+   * @details Frames are captured to system memory by NvFBC, uploaded through a
+   * D3D11 staging texture, and shared with the encoder device, so NVIDIA
+   * NVENC streaming works on Windows 7 without Desktop Duplication.
+   */
+  class display_nvfbc_vram_t: public display_vram_t {
+    nvfbc_capture_t session;
+    texture2d_t staging;  ///< CPU-writable staging texture for NvFBC uploads.
+
+  public:
+    /**
+     * @brief Initialize NvFBC capture and D3D upload resources.
+     *
+     * @param config Configuration values to apply.
+     * @param display_name Display name.
+     * @return 0 on success; nonzero or negative platform status on failure.
+     */
+    int init(const ::video::config_t &config, const std::string &display_name);
+    /**
+     * @brief Capture a display frame into the provided image object.
+     *
+     * @param pull_free_image_cb Callback that provides an available image buffer.
+     * @param img_out Captured image buffer returned to the streaming pipeline.
+     * @param timeout Maximum time to wait for the operation.
+     * @param cursor_visible Cursor visibility (cursor is composited by NvFBC).
+     * @return Capture status reported to the streaming pipeline.
+     */
+    capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) override;
+    /**
+     * @brief Release resources associated with the last captured snapshot.
+     *
+     * @return Capture status after releasing the current snapshot.
+     */
+    capture_e release_snapshot() override;
+  };
 }  // namespace platf::dxgi

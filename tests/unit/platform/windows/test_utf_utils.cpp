@@ -12,7 +12,7 @@
 
 #ifdef _WIN32
   // platform includes
-  #include <Windows.h>
+  #include <windows.h>
 
   // local includes
   #include <src/platform/windows/utf_utils.h>

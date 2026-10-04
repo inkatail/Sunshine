@@ -7,7 +7,7 @@
 #include "src/logging.h"
 
 #include <string>
-#include <Windows.h>
+#include <windows.h>
 
 using namespace std::literals;
 

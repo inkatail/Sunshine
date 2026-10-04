@@ -5,8 +5,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <format>
 #include <string>
-#include <Windows.h>
-#include <WtsApi32.h>
+#include <windows.h>
+#include <wtsapi32.h>
 
 // local includes
 #include "src/logging.h"
@@ -266,13 +266,20 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
       continue;
     }
 
-    // Start Sunshine.exe inside our job object
-    UpdateProcThreadAttribute(startup_info.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &job_handle, sizeof(job_handle), nullptr, nullptr);
+    // Start Sunshine.exe inside our job object.
+    // windows-legacy: PROC_THREAD_ATTRIBUTE_JOB_LIST requires Windows 8+; on
+    // 7/Vista the assignment fails and Sunshine runs without job tracking.
+    if (!UpdateProcThreadAttribute(startup_info.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &job_handle, sizeof(job_handle), nullptr, nullptr)) {
+      CloseHandle(job_handle);
+      job_handle = nullptr;
+    }
 
     PROCESS_INFORMATION process_info;
     if (!CreateProcessAsUserW(console_token, L"Sunshine.exe", nullptr, nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, (LPSTARTUPINFOW) &startup_info, &process_info)) {
       CloseHandle(console_token);
-      CloseHandle(job_handle);
+      if (job_handle) {
+        CloseHandle(job_handle);
+      }
       continue;
     }
 
@@ -316,7 +323,9 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
     CloseHandle(process_info.hThread);
     CloseHandle(process_info.hProcess);
     CloseHandle(console_token);
-    CloseHandle(job_handle);
+    if (job_handle) {
+      CloseHandle(job_handle);
+    }
   }
 
   // Let SCM know we've stopped

@@ -7,7 +7,7 @@
 
 // platform includes
 #include <d3dcompiler.h>
-#include <DirectXMath.h>
+#include <directxmath.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -21,6 +21,7 @@ extern "C" {
 // local includes
 #include "display.h"
 #include "misc.h"
+#include "os_version.h"
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
@@ -849,24 +850,10 @@ namespace platf::dxgi {
           return -1;
       }
 
-      D3D_FEATURE_LEVEL featureLevels[] {
-        D3D_FEATURE_LEVEL_11_1,
-        D3D_FEATURE_LEVEL_11_0,
-        D3D_FEATURE_LEVEL_10_1,
-        D3D_FEATURE_LEVEL_10_0,
-        D3D_FEATURE_LEVEL_9_3,
-        D3D_FEATURE_LEVEL_9_2,
-        D3D_FEATURE_LEVEL_9_1
-      };
-
-      HRESULT status = D3D11CreateDevice(
+      // windows-legacy: retry helper drops 11_1 and VIDEO_SUPPORT on pre-8 runtimes.
+      HRESULT status = d3d11_create_device_retry(
         adapter_p,
-        D3D_DRIVER_TYPE_UNKNOWN,
-        nullptr,
         D3D11_CREATE_DEVICE_FLAGS | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-        featureLevels,
-        sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
-        D3D11_SDK_VERSION,
         &device,
         nullptr,
         &device_ctx
@@ -979,18 +966,28 @@ namespace platf::dxgi {
       // Textures can change when transitioning from a dummy image to a real image.
       img_ctx.reset();
 
-      device1_t device1;
-      auto status = device->QueryInterface(__uuidof(ID3D11Device1), (void **) &device1);
-      if (FAILED(status)) {
-        BOOST_LOG(error) << "Failed to query ID3D11Device1 [0x"sv << util::hex(status).to_string_view() << ']';
-        return -1;
-      }
+      // windows-legacy: ID3D11Device1/OpenSharedResource1 need Windows 8+.
+      // Pre-8 textures use legacy shared handles opened via ID3D11Device.
+      if (win_legacy::is_win8_or_greater()) {
+        device1_t device1;
+        auto status = device->QueryInterface(__uuidof(ID3D11Device1), (void **) &device1);
+        if (FAILED(status)) {
+          BOOST_LOG(error) << "Failed to query ID3D11Device1 [0x"sv << util::hex(status).to_string_view() << ']';
+          return -1;
+        }
 
-      // Open a handle to the shared texture
-      status = device1->OpenSharedResource1(img.encoder_texture_handle, __uuidof(ID3D11Texture2D), (void **) &img_ctx.encoder_texture);
-      if (FAILED(status)) {
-        BOOST_LOG(error) << "Failed to open shared image texture [0x"sv << util::hex(status).to_string_view() << ']';
-        return -1;
+        // Open a handle to the shared texture
+        status = device1->OpenSharedResource1(img.encoder_texture_handle, __uuidof(ID3D11Texture2D), (void **) &img_ctx.encoder_texture);
+        if (FAILED(status)) {
+          BOOST_LOG(error) << "Failed to open shared image texture [0x"sv << util::hex(status).to_string_view() << ']';
+          return -1;
+        }
+      } else {
+        auto status = device->OpenSharedResource(img.encoder_texture_handle, __uuidof(ID3D11Texture2D), (void **) &img_ctx.encoder_texture);
+        if (FAILED(status)) {
+          BOOST_LOG(error) << "Failed to open shared image texture [0x"sv << util::hex(status).to_string_view() << ']';
+          return -1;
+        }
       }
 
       // Get the keyed mutex to synchronize with the capture code
@@ -1960,9 +1957,18 @@ namespace platf::dxgi {
     t.Usage = D3D11_USAGE_DEFAULT;
     t.Format = img->format;
     t.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-    t.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    // windows-legacy: NT handles require Windows 8+. On 7/Vista use legacy
+    // named-shared resources (IDXGIResource::GetSharedHandle).
+    const bool nt_handles = win_legacy::is_win8_or_greater();
+    t.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX
+      | (nt_handles ? D3D11_RESOURCE_MISC_SHARED_NTHANDLE : D3D11_RESOURCE_MISC_SHARED);
 
     auto status = device->CreateTexture2D(&t, nullptr, &img->capture_texture);
+    if (FAILED(status) && nt_handles) {
+      BOOST_LOG(warning) << "NT shared texture failed, retrying with legacy shared handle [0x"sv << util::hex(status).to_string_view() << ']';
+      t.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+      status = device->CreateTexture2D(&t, nullptr, &img->capture_texture);
+    }
     if (FAILED(status)) {
       BOOST_LOG(error) << "Failed to create img buf texture [0x"sv << util::hex(status).to_string_view() << ']';
       return -1;
@@ -1981,18 +1987,34 @@ namespace platf::dxgi {
       return -1;
     }
 
-    resource1_t resource;
-    status = img->capture_texture->QueryInterface(__uuidof(IDXGIResource1), (void **) &resource);
-    if (FAILED(status)) {
-      BOOST_LOG(error) << "Failed to query IDXGIResource1 [0x"sv << util::hex(status).to_string_view() << ']';
-      return -1;
-    }
+    if (nt_handles) {
+      resource1_t resource;
+      status = img->capture_texture->QueryInterface(__uuidof(IDXGIResource1), (void **) &resource);
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "Failed to query IDXGIResource1 [0x"sv << util::hex(status).to_string_view() << ']';
+        return -1;
+      }
 
-    // Create a handle for the encoder device to use to open this texture
-    status = resource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &img->encoder_texture_handle);
-    if (FAILED(status)) {
-      BOOST_LOG(error) << "Failed to create shared texture handle [0x"sv << util::hex(status).to_string_view() << ']';
-      return -1;
+      // Create a handle for the encoder device to use to open this texture
+      status = resource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ, nullptr, &img->encoder_texture_handle);
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "Failed to create shared texture handle [0x"sv << util::hex(status).to_string_view() << ']';
+        return -1;
+      }
+    } else {
+      // windows-legacy: pre-8 path without IDXGIResource1.
+      resource_t resource;
+      status = img->capture_texture->QueryInterface(__uuidof(IDXGIResource), (void **) &resource);
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "Failed to query IDXGIResource [0x"sv << util::hex(status).to_string_view() << ']';
+        return -1;
+      }
+
+      status = resource->GetSharedHandle(&img->encoder_texture_handle);
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "Failed to get shared texture handle [0x"sv << util::hex(status).to_string_view() << ']';
+        return -1;
+      }
     }
 
     img->data = (std::uint8_t *) img->capture_texture.get();
@@ -2187,5 +2209,168 @@ namespace platf::dxgi {
 #undef compile_pixel_shader_helper
 
     return 0;
+  }
+
+  int display_nvfbc_vram_t::init(const ::video::config_t &config, const std::string &display_name) {
+    if (!nvfbc_capture_t::available()) {
+      BOOST_LOG(debug) << "NvFBC unavailable on this system"sv;
+      return -1;
+    }
+
+    // Geometry comes from GDI so no DXGI duplication-capable output is needed.
+    DEVMODEW mode {};
+    mode.dmSize = sizeof(mode);
+    std::wstring wide_name = display_name.empty() ? std::wstring {} : utf_utils::from_utf8(display_name);
+    if (!EnumDisplaySettingsW(display_name.empty() ? nullptr : wide_name.c_str(), ENUM_CURRENT_SETTINGS, &mode)) {
+      BOOST_LOG(error) << "NvFBC: failed to query display settings for ["sv << display_name << ']';
+      return -1;
+    }
+
+    width = (int) mode.dmPelsWidth;
+    height = (int) mode.dmPelsHeight;
+    width_before_rotation = width;
+    height_before_rotation = height;
+    display_rotation = DXGI_MODE_ROTATION_IDENTITY;
+    offset_x = mode.dmPosition.x - GetSystemMetrics(SM_XVIRTUALSCREEN);
+    offset_y = mode.dmPosition.y - GetSystemMetrics(SM_YVIRTUALSCREEN);
+    env_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    env_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    capture_format = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    if (FAILED(CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory))) {
+      BOOST_LOG(error) << "NvFBC: failed to create DXGI factory"sv;
+      return -1;
+    }
+
+    // Capture on the NVIDIA adapter backing this display so the upload device
+    // matches the encoder GPU. Falls back to the default adapter.
+    {
+      const auto wanted = wide_name;
+      bool matched = false;
+      adapter_t::pointer adapter_p {};
+      for (int x = 0; !matched && factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+        adapter_t adapter_tmp {adapter_p};
+        DXGI_ADAPTER_DESC desc {};
+        if (FAILED(adapter_tmp->GetDesc(&desc)) || desc.VendorId != 0x10DE) {
+          continue;
+        }
+        output_t::pointer output_p {};
+        for (int y = 0; adapter_tmp->EnumOutputs(y, &output_p) != DXGI_ERROR_NOT_FOUND; ++y) {
+          output_t output_tmp {output_p};
+          DXGI_OUTPUT_DESC out_desc {};
+          if (FAILED(output_tmp->GetDesc(&out_desc))) {
+            continue;
+          }
+          if (display_name.empty() || out_desc.DeviceName == wanted) {
+            adapter = std::move(adapter_tmp);
+            matched = true;
+            break;
+          }
+        }
+      }
+    }
+
+    // Plain capture device (no VIDEO_SUPPORT needed here); the retry helper
+    // drops D3D11.1 and the video flag for pre-8 runtimes.
+    D3D_FEATURE_LEVEL actual_level {};
+    HRESULT status = d3d11_create_device_retry(adapter.get(), D3D11_CREATE_DEVICE_FLAGS, &device, &actual_level, &device_ctx);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "NvFBC: failed to create D3D11 upload device [0x"sv << util::hex(status).to_string_view() << ']';
+      return -1;
+    }
+    feature_level = actual_level;
+
+    D3D11_TEXTURE2D_DESC t {};
+    t.Width = (UINT) width;
+    t.Height = (UINT) height;
+    t.MipLevels = 1;
+    t.ArraySize = 1;
+    t.SampleDesc.Count = 1;
+    t.Usage = D3D11_USAGE_STAGING;
+    t.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    t.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    status = device->CreateTexture2D(&t, nullptr, &staging);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "NvFBC: failed to create staging texture [0x"sv << util::hex(status).to_string_view() << ']';
+      return -1;
+    }
+
+    client_frame_rate = config.framerate;
+    client_frame_rate_strict = {0, 0};
+    if (config.framerateX100 > 0) {
+      const AVRational fps = ::video::framerate_to_rational(config);
+      client_frame_rate_strict = DXGI_RATIONAL {static_cast<UINT>(fps.num), static_cast<UINT>(fps.den)};
+    }
+
+    if (!timer || !*timer) {
+      BOOST_LOG(error) << "Uninitialized high precision timer"sv;
+      return -1;
+    }
+
+    const unsigned int adapter_idx = nvfbc_capture_t::adapter_index_for_display(display_name);
+    if (session.init(adapter_idx, width, height)) {
+      return -1;
+    }
+
+    BOOST_LOG(info) << "NvFBC VRAM capture active on ["sv << display_name << "] "sv << width << 'x' << height;
+    return 0;
+  }
+
+  capture_e display_nvfbc_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool /*cursor_visible*/) {
+    // The HW cursor is composited by the driver (bWithHWCursor).
+    if (auto status = session.grab(timeout); status != capture_e::ok) {
+      return status;
+    }
+
+    if ((int) session.frame_width() < width || (int) session.frame_height() < height) {
+      BOOST_LOG(info) << "NvFBC frame size changed; reinitializing capture"sv;
+      return capture_e::reinit;
+    }
+
+    std::shared_ptr<platf::img_t> img;
+    if (!pull_free_image_cb(img)) {
+      return capture_e::interrupted;
+    }
+
+    auto d3d_img = std::static_pointer_cast<img_d3d_t>(img);
+    d3d_img->blank = false;
+    if (complete_img(d3d_img.get(), false)) {
+      return capture_e::error;
+    }
+
+    // Upload the cropped display rect through the staging texture.
+    D3D11_MAPPED_SUBRESOURCE mapped {};
+    auto status = device_ctx->Map(staging.get(), 0, D3D11_MAP_WRITE, 0, &mapped);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "NvFBC: failed to map staging texture [0x"sv << util::hex(status).to_string_view() << ']';
+      return capture_e::error;
+    }
+    {
+      const std::size_t src_stride = (std::size_t) session.buffer_stride_pixels() * 4;
+      const std::uint8_t *src = session.frame_buffer()
+        + (std::size_t) offset_y * src_stride
+        + (std::size_t) offset_x * 4;
+      std::uint8_t *dst = static_cast<std::uint8_t *>(mapped.pData);
+      for (int y = 0; y < height; ++y) {
+        std::copy_n(src + (std::size_t) y * src_stride, (std::size_t) width * 4, dst + (std::size_t) y * mapped.RowPitch);
+      }
+    }
+    device_ctx->Unmap(staging.get(), 0);
+
+    texture_lock_helper lock_helper(d3d_img->capture_mutex.get());
+    if (!lock_helper.lock()) {
+      BOOST_LOG(error) << "NvFBC: failed to lock capture texture"sv;
+      return capture_e::error;
+    }
+    device_ctx->CopyResource(d3d_img->capture_texture.get(), staging.get());
+
+    img_out = std::move(img);
+    img_out->frame_timestamp = std::chrono::steady_clock::now();
+    return capture_e::ok;
+  }
+
+  capture_e display_nvfbc_vram_t::release_snapshot() {
+    // ToSys grabs are synchronous copies; no frame is held.
+    return capture_e::ok;
   }
 }  // namespace platf::dxgi

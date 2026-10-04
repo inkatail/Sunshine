@@ -21,7 +21,7 @@
 #pragma once
 
 // platform includes
-#include <Windows.h>
+#include <windows.h>
 
 // local includes
 #include "os_version_check.h"

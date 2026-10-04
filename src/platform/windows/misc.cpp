@@ -26,13 +26,13 @@
 #include <iphlpapi.h>
 #include <iterator>
 #include <timeapi.h>
-#include <UserEnv.h>
-#include <WinSock2.h>
-#include <Windows.h>
-#include <WinUser.h>
+#include <userenv.h>
+#include <winsock2.h>
+#include <windows.h>
+#include <winuser.h>
 #include <wlanapi.h>
-#include <WS2tcpip.h>
-#include <WtsApi32.h>
+#include <ws2tcpip.h>
+#include <wtsapi32.h>
 #include <sddl.h>
 // clang-format on
 
@@ -43,7 +43,7 @@
  * @brief Macro for NTDDI VERSION.
  */
 #define NTDDI_VERSION NTDDI_WIN10
-#include <Shlwapi.h>
+#include <shlwapi.h>
 
 // local includes
 #include "misc.h"
