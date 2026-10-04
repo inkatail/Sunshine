@@ -2390,4 +2390,151 @@ namespace platf::dxgi {
     // ToSys grabs are synchronous copies; no frame is held.
     return capture_e::ok;
   }
+
+  int display_nvfbc_dx9_vram_t::init(const ::video::config_t &config, const std::string &display_name) {
+    if (!nvfbc_dx9_capture_t::available()) {
+      BOOST_LOG(debug) << "NvFBC-Dx9 unavailable on this system"sv;
+      return -1;
+    }
+
+    // Capture the input desktop like the DXGI backends do, so service
+    // (session 0) launches land on the user's desktop.
+    syncThreadDesktop();
+
+    // Geometry comes from GDI so no DXGI duplication-capable output is needed.
+    DEVMODEW mode {};
+    mode.dmSize = sizeof(mode);
+    std::wstring wide_name = display_name.empty() ? std::wstring {} : utf_utils::from_utf8(display_name);
+    if (!EnumDisplaySettingsW(display_name.empty() ? nullptr : wide_name.c_str(), ENUM_CURRENT_SETTINGS, &mode)) {
+      BOOST_LOG(error) << "NvFBC-Dx9: failed to query display settings for ["sv << display_name << ']';
+      return -1;
+    }
+
+    width = (int) mode.dmPelsWidth;
+    height = (int) mode.dmPelsHeight;
+    width_before_rotation = width;
+    height_before_rotation = height;
+    display_rotation = DXGI_MODE_ROTATION_IDENTITY;
+    offset_x = mode.dmPosition.x - GetSystemMetrics(SM_XVIRTUALSCREEN);
+    offset_y = mode.dmPosition.y - GetSystemMetrics(SM_YVIRTUALSCREEN);
+    env_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    env_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    capture_format = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    if (FAILED(CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory))) {
+      BOOST_LOG(error) << "NvFBC-Dx9: failed to create DXGI factory"sv;
+      return -1;
+    }
+
+    // D3D11 pickup device on the NVIDIA adapter backing this display.
+    {
+      const auto wanted = wide_name;
+      bool matched = false;
+      adapter_t::pointer adapter_p {};
+      for (int x = 0; !matched && factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+        adapter_t adapter_tmp {adapter_p};
+        DXGI_ADAPTER_DESC desc {};
+        if (FAILED(adapter_tmp->GetDesc(&desc)) || desc.VendorId != 0x10DE) {
+          continue;
+        }
+        output_t::pointer output_p {};
+        for (int y = 0; adapter_tmp->EnumOutputs(y, &output_p) != DXGI_ERROR_NOT_FOUND; ++y) {
+          output_t output_tmp {output_p};
+          DXGI_OUTPUT_DESC out_desc {};
+          if (FAILED(output_tmp->GetDesc(&out_desc))) {
+            continue;
+          }
+          if (display_name.empty() || out_desc.DeviceName == wanted) {
+            adapter = std::move(adapter_tmp);
+            matched = true;
+            break;
+          }
+        }
+      }
+      if (!matched) {
+        BOOST_LOG(debug) << "NvFBC-Dx9: no NVIDIA DXGI adapter matched ["sv << display_name << "]; using default D3D11 device"sv;
+      }
+    }
+
+    D3D_FEATURE_LEVEL actual_level {};
+    HRESULT status = d3d11_create_device_retry(adapter.get(), D3D11_CREATE_DEVICE_FLAGS, &device, &actual_level, &device_ctx);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "NvFBC-Dx9: failed to create D3D11 device [0x"sv << util::hex(status).to_string_view() << ']';
+      return -1;
+    }
+    feature_level = actual_level;
+
+    client_frame_rate = config.framerate;
+    client_frame_rate_strict = {0, 0};
+    if (config.framerateX100 > 0) {
+      const AVRational fps = ::video::framerate_to_rational(config);
+      client_frame_rate_strict = DXGI_RATIONAL {static_cast<UINT>(fps.num), static_cast<UINT>(fps.den)};
+    }
+
+    if (!timer || !*timer) {
+      BOOST_LOG(error) << "Uninitialized high precision timer"sv;
+      return -1;
+    }
+
+    if (session.init(display_name, width, height)) {
+      return -1;
+    }
+
+    // Open the D3D9 shared texture on the D3D11 device. Legacy (non-1) open
+    // matches the pre-NT handle kind D3D9Ex produces.
+    status = device->OpenSharedResource(session.shared_handle(), __uuidof(ID3D11Texture2D), (void **) &opened_texture);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "NvFBC-Dx9: OpenSharedResource failed [0x"sv << util::hex(status).to_string_view() << "]; shared D3D9 textures unsupported here"sv;
+      return -1;
+    }
+
+    BOOST_LOG(info) << "NvFBC Dx9Vid capture active on ["sv << display_name << "] "sv << width << 'x' << height;
+    return 0;
+  }
+
+  capture_e display_nvfbc_dx9_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool /*cursor_visible*/) {
+    // The HW cursor is composited by the driver (bWithHWCursor).
+    if (auto status = session.grab(timeout); status != capture_e::ok) {
+      return status;
+    }
+
+    if ((int) session.frame_width() != width || (int) session.frame_height() != height) {
+      BOOST_LOG(info) << "NvFBC-Dx9 frame size changed; reinitializing capture"sv;
+      return capture_e::reinit;
+    }
+
+    // Static screen: skip the GPU copy and encode like the DXGI update path.
+    // The first frame is always copied (initial diff-map state is untrusted).
+    if (!session.claim_first_grab() && !session.frame_has_changes()) {
+      return capture_e::timeout;
+    }
+
+    std::shared_ptr<platf::img_t> img;
+    if (!pull_free_image_cb(img)) {
+      return capture_e::interrupted;
+    }
+
+    auto d3d_img = std::static_pointer_cast<img_d3d_t>(img);
+    d3d_img->blank = false;
+    if (complete_img(d3d_img.get(), false)) {
+      return capture_e::error;
+    }
+
+    // Zero-copy pickup: single GPU-side copy, no system memory involved.
+    texture_lock_helper lock_helper(d3d_img->capture_mutex.get());
+    if (!lock_helper.lock()) {
+      BOOST_LOG(error) << "NvFBC-Dx9: failed to lock capture texture"sv;
+      return capture_e::error;
+    }
+    device_ctx->CopyResource(d3d_img->capture_texture.get(), opened_texture.get());
+
+    img_out = std::move(img);
+    img_out->frame_timestamp = std::chrono::steady_clock::now();
+    return capture_e::ok;
+  }
+
+  capture_e display_nvfbc_dx9_vram_t::release_snapshot() {
+    // Dx9Vid grabs complete synchronously; no frame is held.
+    return capture_e::ok;
+  }
 }  // namespace platf::dxgi

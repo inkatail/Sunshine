@@ -284,5 +284,140 @@ namespace platf::nvfbc_win {
     virtual nvfbc_result_t NVFBC_WIN_API release() = 0;
   };
 
+  auto constexpr NVFBC_TO_DX9_VID = 0x2003;  ///< Interface id for the Dx9Vid target.
+  auto constexpr DX9VID_MAX_DIFF_MAP_SIZE = 0x00040000;  ///< Suggested client diff-map allocation.
+
+  /**
+   * @brief Output pixel formats for the Dx9Vid target.
+   */
+  enum dx9vid_buffer_format_t : nv_u32_t {
+    DX9VID_ARGB = 0,  ///< 32-bit packed ARGB.
+    DX9VID_NV12 = 1,  ///< YUV 4:2:0.
+    DX9VID_ARGB10 = 2,  ///< 32-bit packed A2B10G10R10.
+  };
+
+  /**
+   * @brief Grab modes for the Dx9Vid target.
+   */
+  enum dx9vid_grab_mode_t : nv_u32_t {
+    DX9VID_SOURCEMODE_FULL = 0,  ///< Grab full resolution.
+    DX9VID_SOURCEMODE_SCALE = 1,  ///< Scale to target width/height.
+    DX9VID_SOURCEMODE_CROP = 2,  ///< Crop subwindow at start X/Y of target size.
+  };
+
+  /**
+   * @brief Grab flags for the Dx9Vid target.
+   */
+  enum dx9vid_grab_flags_t : nv_u32_t {
+    DX9VID_NOFLAGS = 0x0,  ///< Wait for a new frame or HW cursor move.
+    DX9VID_NOWAIT = 0x1,  ///< Never wait.
+    DX9VID_WAIT_WITH_TIMEOUT = 0x10,  ///< Wait up to `dwWaitTime` milliseconds.
+  };
+
+  /**
+   * @brief Client output buffer addresses for the Dx9Vid target.
+   *
+   * @details The surfaces must be client-created D3D9 surfaces; NvFBC copies
+   * the grabbed desktop into the selected one. Shared D3D9Ex textures qualify,
+   * which is what makes D3D11 zero-copy pickup possible.
+   */
+  struct dx9vid_out_buf_t {
+    void *primary;  ///< Grabbed desktop image surface (IDirect3DSurface9 *).
+    void *secondary;  ///< Reserved, set to null.
+  };
+
+  static_assert(sizeof(dx9vid_out_buf_t) == 16, "Dx9Vid output buffer layout mismatch");
+
+  /**
+   * @brief Setup parameters for a Dx9Vid capture session.
+   */
+  struct dx9vid_setup_params_t {
+    nv_u32_t dwVersion;  ///< Struct version, set to `NVFBC_TODX9VID_SETUP_PARAMS_VER`.
+    nv_u32_t bWithHWCursor : 1;  ///< Composite the HW cursor into captured frames.
+    nv_u32_t bStereoGrab : 1;  ///< Reserved, zero.
+    nv_u32_t bDiffMap : 1;  ///< Enable the diff-map feature.
+    nv_u32_t bEnableSeparateCursorCapture : 1;  ///< Enable separate cursor stream.
+    nv_u32_t bHDRRequest : 1;  ///< Request HDR capture.
+    nv_u32_t bClassificationMap : 1;  ///< Enable the classification map.
+    nv_u32_t bReservedBits : 26;  ///< Reserved.
+    dx9vid_buffer_format_t eMode;  ///< Output image format.
+    nv_u32_t dwNumBuffers;  ///< Number of client output buffers.
+    nv_u32_t eDiffMapBlockSize;  ///< Diff-map block size (0 selects 128x128).
+    nv_u32_t eStereoFmt;  ///< Reserved, zero.
+    nv_u32_t dwDiffMapBuffSize;  ///< Client diff-map allocation size.
+    nv_u32_t dwClassificationMapBuffSize;  ///< Client classification allocation.
+    nv_u32_t dwClassificationMapStampWidth;  ///< Classification stamp width.
+    nv_u32_t dwClassificationMapStampHeight;  ///< Classification stamp height.
+    void **ppDiffMap;  ///< Client diff-map buffers (VirtualAlloc, one per buffer).
+    void **ppClassificationMap;  ///< Client classification buffers.
+    dx9vid_out_buf_t *ppBuffer;  ///< Client output buffers.
+    void *hCursorCaptureEvent;  ///< Signaled on cursor updates (out).
+    nv_u32_t dwReserved[22];  ///< Reserved, zero.
+    void *pReserved[12];  ///< Reserved, null.
+  };
+
+  static_assert(sizeof(dx9vid_setup_params_t) == 256, "Dx9Vid setup params layout mismatch");
+
+  /**
+   * @brief Per-call parameters for a Dx9Vid grab.
+   */
+  struct dx9vid_grab_params_t {
+    nv_u32_t dwVersion;  ///< Struct version, set to `NVFBC_TODX9VID_GRAB_FRAME_PARAMS_VER`.
+    nv_u32_t dwFlags;  ///< Bit-mask of `dx9vid_grab_flags_t` values.
+    nv_u32_t dwTargetWidth;  ///< Target width (SCALE/CROP modes).
+    nv_u32_t dwTargetHeight;  ///< Target height (SCALE/CROP modes).
+    nv_u32_t dwStartX;  ///< Crop origin X (CROP mode).
+    nv_u32_t dwStartY;  ///< Crop origin Y (CROP mode).
+    dx9vid_grab_mode_t eGMode;  ///< Frame grab mode.
+    nv_u32_t dwBufferIdx;  ///< Output buffer index to grab into.
+    nvfbc_frame_grab_info_t *pNvFBCFrameGrabInfo;  ///< Grab feedback (in/out).
+    nv_u32_t dwWaitTime;  ///< Wait limit in ms (WAIT_WITH_TIMEOUT).
+    nv_u32_t dwReserved[23];  ///< Reserved, zero.
+    void *pReserved[15];  ///< Reserved, null.
+  };
+
+  static_assert(sizeof(dx9vid_grab_params_t) == 256, "Dx9Vid grab params layout mismatch");
+
+  /**
+   * @brief Dx9Vid capture interface (5-method COM-style vtable).
+   */
+  class dx9vid_interface_t {
+  public:
+    /**
+     * @brief Register client output buffers for the session.
+     *
+     * @param params Setup parameters.
+     * @return NvFBC status code.
+     */
+    virtual nvfbc_result_t NVFBC_WIN_API setup(dx9vid_setup_params_t *params) = 0;
+    /**
+     * @brief Capture the desktop into the selected client buffer.
+     *
+     * @param params Grab parameters and feedback.
+     * @return NvFBC status code.
+     */
+    virtual nvfbc_result_t NVFBC_WIN_API grab(dx9vid_grab_params_t *params) = 0;
+    /**
+     * @brief High-precision GPU-based CPU sleep.
+     *
+     * @param microseconds Sleep duration in microseconds.
+     * @return NvFBC status code.
+     */
+    virtual nvfbc_result_t NVFBC_WIN_API gpu_sleep(long long microseconds) = 0;
+    /**
+     * @brief Destroy the Dx9Vid capture session.
+     *
+     * @return NvFBC status code.
+     */
+    virtual nvfbc_result_t NVFBC_WIN_API release() = 0;
+    /**
+     * @brief Capture HW cursor data on shape change.
+     *
+     * @param params Reserved for future use (pass null).
+     * @return NvFBC status code.
+     */
+    virtual nvfbc_result_t NVFBC_WIN_API cursor_capture(void *params) = 0;
+  };
+
 #undef NVFBC_WIN_API
 }  // namespace platf::nvfbc_win

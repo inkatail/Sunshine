@@ -101,6 +101,7 @@ list(PREPEND PLATFORM_LIBRARIES
         ${CURL_STATIC_LIBRARIES}
         avrt
         d3d11
+        d3d9
         D3DCompiler
         dwmapi
         dxgi

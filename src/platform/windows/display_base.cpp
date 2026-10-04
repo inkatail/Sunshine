@@ -1152,6 +1152,17 @@ namespace platf {
       }
     }
 
+    // windows-legacy: experimental zero-copy Dx9Vid path. Explicit opt-in only
+    // (`capture=nvfbc-dx9`); autodetect keeps proven ToSys until Dx9Vid is
+    // validated on hardware.
+    if (config::video.capture == "nvfbc-dx9" && hwdevice_type == mem_type_e::dxgi) {
+      auto disp = std::make_shared<dxgi::display_nvfbc_dx9_vram_t>();
+
+      if (!disp->init(config, display_name)) {
+        return disp;
+      }
+    }
+
     if ((config::video.capture == "wgc" || config::video.capture.empty()) && wgc_allowed && wgc_compiled) {
 #ifndef SUNSHINE_NO_WGC
       if (hwdevice_type == mem_type_e::dxgi) {

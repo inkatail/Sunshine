@@ -23,6 +23,9 @@
 #include "src/logging.h"
 #include "utf_utils.h"
 
+// platform includes
+#include <d3d9.h>
+
 namespace platf {
   using namespace std::literals;
 }
@@ -181,6 +184,48 @@ namespace platf::dxgi {
         last_warning = now;
       }
     }
+
+    /**
+     * @brief Context for resolving a GDI display name to a monitor handle.
+     */
+    struct monitor_find_ctx_t {
+      std::wstring want;  ///< Display device name to match.
+      HMONITOR found = nullptr;  ///< Matched monitor handle.
+    };
+
+    /**
+     * @brief MonitorEnumProc callback matching a display device name.
+     *
+     * @param monitor Monitor handle being enumerated.
+     * @param lparam Opaque pointer to `monitor_find_ctx_t`.
+     * @return FALSE once matched, TRUE to continue otherwise.
+     */
+    BOOL CALLBACK find_monitor_by_name(HMONITOR monitor, HDC, LPRECT, LPARAM lparam) {
+      auto *ctx = reinterpret_cast<monitor_find_ctx_t *>(lparam);
+      MONITORINFOEXW info {};
+      info.cbSize = sizeof(info);
+      if (GetMonitorInfoW(monitor, &info) && info.szDevice == ctx->want) {
+        ctx->found = monitor;
+        return FALSE;
+      }
+      return TRUE;
+    }
+
+    /**
+     * @brief Resolve a GDI display name to its monitor handle.
+     *
+     * @param display_name GDI display name, or empty for the primary monitor.
+     * @return Monitor handle, or null when the display is not found.
+     */
+    HMONITOR monitor_for_display(const std::string &display_name) {
+      if (display_name.empty()) {
+        POINT origin {};
+        return MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+      }
+      monitor_find_ctx_t ctx {utf_utils::from_utf8(display_name)};
+      EnumDisplayMonitors(nullptr, nullptr, find_monitor_by_name, reinterpret_cast<LPARAM>(&ctx));
+      return ctx.found;
+    }
   }  // namespace
 
   nvfbc_capture_t::nvfbc_capture_t() = default;
@@ -262,59 +307,59 @@ namespace platf::dxgi {
     }
 
     auto key = priv_data_key();
-    nvfbc_win::nvfbc_create_params_t params {};
-    params.dwVersion = nvfbc_win::struct_version(sizeof(params), 2);
-    params.dwInterfaceType = nvfbc_win::NVFBC_TO_SYS;
-    params.dwAdapterIdx = adapter_idx;
-    params.pPrivateData = key.data();
-    params.dwPrivateDataSize = (nvfbc_win::nv_u32_t) key.size();
-    if (lib.create_ex(&params) != nvfbc_win::NVFBC_WIN_SUCCESS || !params.pNvFBC) {
+    // Create the session, with diff-map damage detection first. A failed
+    // setup releases its session and retries plainly rather than relying on
+    // re-setup semantics of a half-configured object.
+    auto try_session = [&](bool with_diffmap, unsigned int adapter) -> bool {
+      nvfbc_win::nvfbc_create_params_t params {};
+      params.dwVersion = nvfbc_win::struct_version(sizeof(params), 2);
+      params.dwInterfaceType = nvfbc_win::NVFBC_TO_SYS;
+      params.dwAdapterIdx = adapter;
+      params.pPrivateData = key.data();
+      params.dwPrivateDataSize = (nvfbc_win::nv_u32_t) key.size();
+      if (lib.create_ex(&params) != nvfbc_win::NVFBC_WIN_SUCCESS || !params.pNvFBC) {
+        return false;
+      }
+      auto *iface = static_cast<nvfbc_win::tosys_interface_t *>(params.pNvFBC);
+      nvfbc_win::tosys_setup_params_t setup {};
+      setup.dwVersion = nvfbc_win::struct_version(sizeof(setup), 3);
+      setup.bWithHWCursor = 1;  // Cursor composited by the driver (GameStream behavior).
+      setup.eMode = nvfbc_win::TOSYS_ARGB;
+      setup.ppBuffer = &buffer_storage;
+      if (with_diffmap) {
+        setup.bDiffMap = 1;
+        setup.ppDiffMap = &diffmap_storage;
+      }
+      if (iface->setup(&setup) != nvfbc_win::NVFBC_WIN_SUCCESS || !buffer_storage) {
+        iface->release();
+        buffer_storage = nullptr;
+        diffmap_storage = nullptr;
+        return false;
+      }
+      session = iface;
+      diffmap_active = with_diffmap;
+      return true;
+    };
+
+    unsigned int effective_adapter = adapter_idx;
+    bool session_ok = try_session(true, adapter_idx) || try_session(false, adapter_idx);
+    if (!session_ok && adapter_idx != 0) {
       // Adapter ordinals differ between driver generations; retry the default
       // before giving up (single-GPU systems converge here either way).
-      if (adapter_idx != 0) {
-        BOOST_LOG(warning) << "NvFBC_CreateEx(ToSys) failed on adapter "sv << adapter_idx << "; retrying default adapter"sv;
-        params.dwAdapterIdx = 0;
-        params.pNvFBC = nullptr;
-        if (lib.create_ex(&params) != nvfbc_win::NVFBC_WIN_SUCCESS || !params.pNvFBC) {
-          params.dwAdapterIdx = adapter_idx;
-          params.pNvFBC = nullptr;
-        }
-      }
+      BOOST_LOG(warning) << "NvFBC session failed on adapter "sv << adapter_idx << "; retrying default adapter"sv;
+      effective_adapter = 0;
+      session_ok = try_session(true, 0) || try_session(false, 0);
     }
-    if (!params.pNvFBC) {
+    if (!session_ok) {
       BOOST_LOG(error) << "NvFBC_CreateEx(ToSys) failed on adapter "sv << adapter_idx << "; on GeForce this usually means the unlock key was rejected (see NVFBC_PRIV_DATA). "
         "Sessions also cannot be created while an app is fullscreen on any head; create it at startup."sv;
       return -1;
     }
 
-    auto *iface = static_cast<nvfbc_win::tosys_interface_t *>(params.pNvFBC);
-    nvfbc_win::tosys_setup_params_t setup {};
-    setup.dwVersion = nvfbc_win::struct_version(sizeof(setup), 3);
-    setup.bWithHWCursor = 1;  // Cursor composited by the driver (GameStream behavior).
-    setup.eMode = nvfbc_win::TOSYS_ARGB;
-    setup.ppBuffer = &buffer_storage;
-    // Damage detection like DXGI's frame-update check: static screens skip the
-    // copy and encode. Fall back to plain capture when the driver refuses it.
-    setup.bDiffMap = 1;
-    setup.ppDiffMap = &diffmap_storage;
-    if (iface->setup(&setup) != nvfbc_win::NVFBC_WIN_SUCCESS || !buffer_storage) {
-      setup.bDiffMap = 0;
-      setup.ppDiffMap = nullptr;
-      diffmap_storage = nullptr;
-      if (iface->setup(&setup) != nvfbc_win::NVFBC_WIN_SUCCESS || !buffer_storage) {
-        BOOST_LOG(error) << "NvFBC ToSys setup failed"sv;
-        iface->release();
-        return -1;
-      }
-    } else {
-      diffmap_active = true;
-    }
-
-    session = iface;
     initialized = true;
     last_width = (unsigned int) width;
     last_height = (unsigned int) height;
-    BOOST_LOG(info) << "NvFBC ToSys session active (adapter "sv << adapter_idx << ", "sv << width << 'x' << height << ')';
+    BOOST_LOG(info) << "NvFBC ToSys session active (adapter "sv << effective_adapter << ", "sv << width << 'x' << height << ')';
     return 0;
   }
 
@@ -486,6 +531,286 @@ namespace platf::dxgi {
 
   capture_e display_nvfbc_ram_t::release_snapshot() {
     // ToSys grabs are synchronous copies; no frame is held.
+    return capture_e::ok;
+  }
+
+  nvfbc_dx9_capture_t::nvfbc_dx9_capture_t() = default;
+
+  nvfbc_dx9_capture_t::~nvfbc_dx9_capture_t() {
+    release_session();
+  }
+
+  bool nvfbc_dx9_capture_t::available() {
+    // Side-effect free probe: driver DLL plus a provable D3D9Ex device.
+    // NvFBC_Enable is deliberately not called here; session init does it.
+    auto &lib = nvfbc_library();
+    if (!lib.load()) {
+      return false;
+    }
+    IDirect3D9Ex *d3d9 = nullptr;
+    if (FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d9)) || !d3d9) {
+      return false;
+    }
+    d3d9->Release();
+    return true;
+  }
+
+  /**
+   * @brief Release a D3D9 COM object and null the slot.
+   *
+   * @param slot Pointer slot holding the COM object.
+   */
+  static void release_d3d9_slot(void *&slot) {
+    if (slot) {
+      static_cast<IUnknown *>(slot)->Release();
+      slot = nullptr;
+    }
+  }
+
+  int nvfbc_dx9_capture_t::init(const std::string &display_name, int width, int height) {
+    auto &lib = nvfbc_library();
+    if (!lib.load()) {
+      BOOST_LOG(error) << "NvFBC-Dx9: driver DLL could not be loaded"sv;
+      return -1;
+    }
+    ensure_nvfbc_enabled(lib);
+
+    IDirect3D9Ex *d3d9 = nullptr;
+    if (FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d9)) || !d3d9) {
+      BOOST_LOG(error) << "NvFBC-Dx9: Direct3DCreate9Ex failed (D3D9Ex needs Vista+)"sv;
+      return -1;
+    }
+    this->d3d9 = d3d9;
+
+    // Bind the D3D9 adapter whose monitor shows this display; require NVIDIA.
+    const HMONITOR wanted_monitor = monitor_for_display(display_name);
+    UINT chosen = D3DADAPTER_DEFAULT;
+    bool found = false;
+    const UINT adapter_count = d3d9->GetAdapterCount();
+    for (UINT i = 0; i < adapter_count; ++i) {
+      if (wanted_monitor && d3d9->GetAdapterMonitor(i) != wanted_monitor) {
+        continue;
+      }
+      D3DADAPTER_IDENTIFIER9 id {};
+      if (FAILED(d3d9->GetAdapterIdentifier(i, 0, &id))) {
+        continue;
+      }
+      if (id.VendorId != 0x10DE) {
+        continue;
+      }
+      chosen = i;
+      found = true;
+      break;
+    }
+    if (!found) {
+      BOOST_LOG(error) << "NvFBC-Dx9: no NVIDIA D3D9 adapter backs display ["sv << display_name << ']';
+      release_session();
+      return -1;
+    }
+
+    D3DPRESENT_PARAMETERS present {};
+    present.Windowed = TRUE;
+    present.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    present.hDeviceWindow = GetDesktopWindow();
+    present.BackBufferFormat = D3DFMT_UNKNOWN;
+    present.BackBufferCount = 1;
+    present.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+    IDirect3DDevice9Ex *device = nullptr;
+    if (FAILED(d3d9->CreateDeviceEx(
+          chosen,
+          D3DDEVTYPE_HAL,
+          present.hDeviceWindow,
+          D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_MULTITHREADED | D3DCREATE_FPU_PRESERVE,
+          &present,
+          nullptr,
+          &device
+        )) ||
+        !device) {
+      BOOST_LOG(error) << "NvFBC-Dx9: CreateDeviceEx failed on adapter "sv << chosen;
+      release_session();
+      return -1;
+    }
+    d3d9_device = device;
+
+    // Shared texture so D3D11 can pick the frame up without a CPU copy.
+    // Render-target usage first (capture target), plain texture as fallback.
+    IDirect3DTexture9 *texture = nullptr;
+    HANDLE shared = nullptr;
+    HRESULT tex_status = device->CreateTexture(
+      (UINT) width,
+      (UINT) height,
+      1,
+      D3DUSAGE_RENDERTARGET,
+      D3DFMT_A8R8G8B8,
+      D3DPOOL_DEFAULT,
+      &texture,
+      &shared
+    );
+    if (FAILED(tex_status) || !texture || !shared) {
+      if (texture) {
+        texture->Release();
+      }
+      texture = nullptr;
+      shared = nullptr;
+      tex_status = device->CreateTexture(
+        (UINT) width,
+        (UINT) height,
+        1,
+        0,
+        D3DFMT_A8R8G8B8,
+        D3DPOOL_DEFAULT,
+        &texture,
+        &shared
+      );
+    }
+    if (FAILED(tex_status) || !texture || !shared) {
+      BOOST_LOG(error) << "NvFBC-Dx9: shared D3D9 texture failed [0x"sv << util::hex(tex_status).to_string_view() << "]; D3D9Ex shared resources required"sv;
+      if (texture) {
+        texture->Release();
+      }
+      release_session();
+      return -1;
+    }
+    d3d9_texture = texture;
+    shared_tex_handle = shared;
+
+    IDirect3DSurface9 *surface = nullptr;
+    if (FAILED(texture->GetSurfaceLevel(0, &surface)) || !surface) {
+      BOOST_LOG(error) << "NvFBC-Dx9: GetSurfaceLevel failed"sv;
+      release_session();
+      return -1;
+    }
+    d3d9_surface = surface;
+    out_buf.primary = surface;
+    out_buf.secondary = nullptr;
+
+    const unsigned int adapter_idx = nvfbc_capture_t::adapter_index_for_display(display_name);
+    auto key = priv_data_key();
+    diff_buffer = VirtualAlloc(nullptr, nvfbc_win::DX9VID_MAX_DIFF_MAP_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    // Create the session, with diff-map damage detection first. A failed
+    // setup releases its session and retries plainly rather than relying on
+    // re-setup semantics of a half-configured object.
+    auto try_session = [&](bool with_diffmap) -> bool {
+      nvfbc_win::nvfbc_create_params_t params {};
+      params.dwVersion = nvfbc_win::struct_version(sizeof(params), 2);
+      params.dwInterfaceType = nvfbc_win::NVFBC_TO_DX9_VID;
+      params.dwAdapterIdx = adapter_idx;
+      params.pDevice = device;
+      params.pPrivateData = key.data();
+      params.dwPrivateDataSize = (nvfbc_win::nv_u32_t) key.size();
+      if (lib.create_ex(&params) != nvfbc_win::NVFBC_WIN_SUCCESS || !params.pNvFBC) {
+        return false;
+      }
+      auto *iface = static_cast<nvfbc_win::dx9vid_interface_t *>(params.pNvFBC);
+      nvfbc_win::dx9vid_setup_params_t setup {};
+      setup.dwVersion = nvfbc_win::struct_version(sizeof(setup), 3);
+      setup.bWithHWCursor = 1;
+      setup.eMode = nvfbc_win::DX9VID_ARGB;
+      setup.dwNumBuffers = 1;
+      setup.ppBuffer = &out_buf;
+      if (with_diffmap) {
+        if (!diff_buffer) {
+          iface->release();
+          return false;
+        }
+        setup.bDiffMap = 1;
+        setup.dwDiffMapBuffSize = nvfbc_win::DX9VID_MAX_DIFF_MAP_SIZE;
+        setup.ppDiffMap = &diff_buffer;
+      }
+      if (iface->setup(&setup) != nvfbc_win::NVFBC_WIN_SUCCESS) {
+        iface->release();
+        return false;
+      }
+      session = iface;
+      diffmap_active = with_diffmap;
+      return true;
+    };
+
+    if (!try_session(true) && !try_session(false)) {
+      BOOST_LOG(error) << "NvFBC-Dx9: CreateEx/setup failed; on GeForce the unlock key was likely rejected (see NVFBC_PRIV_DATA). "
+        "Sessions also cannot be created while an app is fullscreen on any head."sv;
+      if (diff_buffer) {
+        VirtualFree(diff_buffer, 0, MEM_RELEASE);
+        diff_buffer = nullptr;
+      }
+      release_session();
+      return -1;
+    }
+
+    session = iface;
+    initialized = true;
+    last_width = (unsigned int) width;
+    last_height = (unsigned int) height;
+    BOOST_LOG(info) << "NvFBC Dx9Vid session active ("sv << width << 'x' << height << ", zero-copy shared texture)"sv;
+    return 0;
+  }
+
+  capture_e nvfbc_dx9_capture_t::grab(std::chrono::milliseconds timeout) {
+    if (!initialized || !session) {
+      return capture_e::error;
+    }
+    auto *iface = static_cast<nvfbc_win::dx9vid_interface_t *>(session);
+
+    nvfbc_win::nvfbc_frame_grab_info_t info {};
+    nvfbc_win::dx9vid_grab_params_t params {};
+    params.dwVersion = nvfbc_win::struct_version(sizeof(params), 1);
+    if (timeout.count() <= 0) {
+      params.dwFlags = nvfbc_win::DX9VID_NOWAIT;
+    } else {
+      params.dwFlags = nvfbc_win::DX9VID_WAIT_WITH_TIMEOUT;
+      params.dwWaitTime = (nvfbc_win::nv_u32_t) timeout.count();
+    }
+    params.eGMode = nvfbc_win::DX9VID_SOURCEMODE_FULL;
+    params.dwBufferIdx = 0;
+    params.pNvFBCFrameGrabInfo = &info;
+
+    const auto result = iface->grab(&params);
+    if (result == nvfbc_win::NVFBC_WIN_ERROR_INVALIDATED_SESSION || info.bMustRecreate) {
+      BOOST_LOG(warning) << "NvFBC-Dx9 session invalidated; recreating capture"sv;
+      release_session();
+      return capture_e::reinit;
+    }
+    if (result == nvfbc_win::NVFBC_WIN_ERROR_DYNAMIC_DISABLE) {
+      BOOST_LOG(error) << "NvFBC-Dx9 dynamically disabled; recreating capture"sv;
+      release_session();
+      return capture_e::reinit;
+    }
+    if (result == nvfbc_win::NVFBC_WIN_ERROR_PROTECTED_CONTENT || info.bProtectedContent) {
+      warn_protected_content();
+      return capture_e::timeout;
+    }
+    if (result != nvfbc_win::NVFBC_WIN_SUCCESS) {
+      BOOST_LOG(error) << "NvFBC-Dx9 grab failed ["sv << (int) result << ']';
+      return capture_e::error;
+    }
+    if (!info.dwWidth || !info.dwHeight) {
+      return capture_e::error;
+    }
+
+    last_width = info.dwWidth;
+    last_height = info.dwHeight;
+    return capture_e::ok;
+  }
+
+  capture_e nvfbc_dx9_capture_t::release_session() {
+    if (session) {
+      static_cast<nvfbc_win::dx9vid_interface_t *>(session)->release();
+      session = nullptr;
+    }
+    if (diff_buffer) {
+      VirtualFree(diff_buffer, 0, MEM_RELEASE);
+      diff_buffer = nullptr;
+    }
+    release_d3d9_slot(d3d9_surface);
+    release_d3d9_slot(d3d9_texture);
+    release_d3d9_slot(d3d9_device);
+    release_d3d9_slot(d3d9);
+    shared_tex_handle = nullptr;
+    out_buf.primary = nullptr;
+    out_buf.secondary = nullptr;
+    diffmap_active = false;
+    first_grab_pending = true;
+    initialized = false;
     return capture_e::ok;
   }
 }  // namespace platf::dxgi

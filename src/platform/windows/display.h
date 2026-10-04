@@ -7,6 +7,7 @@
 // platform includes
 #include <d3d11.h>
 #include <d3d11_4.h>
+#include <d3d9.h>
 #include <d3dcommon.h>
 #include <dwmapi.h>
 #include <dxgi.h>
@@ -1037,6 +1038,171 @@ namespace platf::dxgi {
   public:
     /**
      * @brief Initialize NvFBC capture and D3D upload resources.
+     *
+     * @param config Configuration values to apply.
+     * @param display_name Display name.
+     * @return 0 on success; nonzero or negative platform status on failure.
+     */
+    int init(const ::video::config_t &config, const std::string &display_name);
+    /**
+     * @brief Capture a display frame into the provided image object.
+     *
+     * @param pull_free_image_cb Callback that provides an available image buffer.
+     * @param img_out Captured image buffer returned to the streaming pipeline.
+     * @param timeout Maximum time to wait for the operation.
+     * @param cursor_visible Cursor visibility (cursor is composited by NvFBC).
+     * @return Capture status reported to the streaming pipeline.
+     */
+    capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) override;
+    /**
+     * @brief Release resources associated with the last captured snapshot.
+     *
+     * @return Capture status after releasing the current snapshot.
+     */
+    capture_e release_snapshot() override;
+  };
+
+  /**
+   * Zero-copy NvFBC capture through D3D9 shared textures (experimental).
+   *
+   * @details windows-legacy: the Dx9Vid target captures straight into
+   * client D3D9 surfaces. Backed by D3D9Ex shared textures, the frames are
+   * picked up on the D3D11 side without any CPU round-trip, unlike ToSys.
+   * Selected explicitly with `capture=nvfbc-dx9`; never picked by autodetect
+   * until proven on hardware. Falls back to ToSys by just selecting `nvfbc`.
+   */
+  class nvfbc_dx9_capture_t {
+  public:
+    nvfbc_dx9_capture_t();
+    ~nvfbc_dx9_capture_t();
+
+    nvfbc_dx9_capture_t(const nvfbc_dx9_capture_t &) = delete;
+    nvfbc_dx9_capture_t &operator=(const nvfbc_dx9_capture_t &) = delete;
+
+    /**
+     * @brief Check whether a Dx9Vid session could be created here.
+     *
+     * @details Side-effect free: loads the driver DLL and proves D3D9Ex
+     * works. Safe to call on non-NVIDIA systems.
+     * @return True when the DLL and D3D9Ex are usable.
+     */
+    static bool available();
+
+    /**
+     * @brief Create the D3D9 device, shared textures and Dx9Vid session.
+     *
+     * @param display_name GDI display name, or empty for the primary display.
+     * @param width Display width in pixels (from GDI).
+     * @param height Display height in pixels (from GDI).
+     * @return 0 on success; -1 when any stage fails (caller falls back).
+     */
+    int init(const std::string &display_name, int width, int height);
+    /**
+     * @brief Grab the next frame into the shared texture.
+     *
+     * @param timeout Maximum time to wait for a new frame.
+     * @return Capture status for the grab attempt.
+     */
+    capture_e grab(std::chrono::milliseconds timeout);
+    /**
+     * @brief Release the Dx9Vid session and all D3D9 resources.
+     *
+     * @return Capture status after releasing the session.
+     */
+    capture_e release_session();
+
+    /**
+     * @brief D3D11-shareable handle of the capture texture.
+     *
+     * @return Shared handle, or null when unavailable.
+     */
+    HANDLE shared_handle() const {
+      return shared_tex_handle;
+    }
+
+    /**
+     * @brief Desktop width reported by the last grab.
+     *
+     * @return Captured desktop width in pixels.
+     */
+    unsigned int frame_width() const {
+      return last_width;
+    }
+
+    /**
+     * @brief Desktop height reported by the last grab.
+     *
+     * @return Captured desktop height in pixels.
+     */
+    unsigned int frame_height() const {
+      return last_height;
+    }
+
+    /**
+     * @brief Report whether the last grabbed frame changed.
+     *
+     * @return True when pixels changed or damage tracking is unavailable.
+     */
+    bool frame_has_changes() const {
+      if (!diffmap_active || !diff_buffer || !last_width || !last_height) {
+        return true;
+      }
+      const auto blocks_x = (last_width + 128 - 1) / 128;
+      const auto blocks_y = (last_height + 128 - 1) / 128;
+      const auto *bytes = static_cast<const std::uint8_t *>(diff_buffer);
+      if (!bytes) {
+        return true;
+      }
+      for (unsigned int i = 0; i < blocks_x * blocks_y; ++i) {
+        if (bytes[i]) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /**
+     * @brief Claim the first-grab full copy.
+     *
+     * @return True once per session for the first grabbed frame.
+     */
+    bool claim_first_grab() {
+      if (first_grab_pending) {
+        first_grab_pending = false;
+        return true;
+      }
+      return false;
+    }
+
+  private:
+    void *d3d9 = nullptr;  ///< IDirect3D9Ex object.
+    void *d3d9_device = nullptr;  ///< IDirect3DDevice9Ex object.
+    void *d3d9_texture = nullptr;  ///< Shared IDirect3DTexture9 object.
+    void *d3d9_surface = nullptr;  ///< Level-0 surface handed to NvFBC.
+    HANDLE shared_tex_handle = nullptr;  ///< D3D11-shareable handle of the texture.
+    nvfbc_win::dx9vid_out_buf_t out_buf {};  ///< Client output buffer for setup.
+    void *diff_buffer = nullptr;  ///< VirtualAlloc diff-map (null when disabled).
+    void *session = nullptr;  ///< NvFBC Dx9Vid interface object.
+    unsigned int last_width = 0;  ///< Desktop width from the last grab.
+    unsigned int last_height = 0;  ///< Desktop height from the last grab.
+    bool diffmap_active = false;  ///< Diff-map damage detection negotiated.
+    bool first_grab_pending = true;  ///< First grabbed frame needs full copy.
+    bool initialized = false;  ///< Session is active.
+  };
+
+  /**
+   * Display backend that uses NvFBC Dx9Vid with a hardware encoder.
+   *
+   * @details Frames stay in GPU memory from NvFBC through the shared texture
+   * into the encoder texture: no system-memory copy at any stage.
+   */
+  class display_nvfbc_dx9_vram_t: public display_vram_t {
+    nvfbc_dx9_capture_t session;
+    texture2d_t opened_texture;  ///< D3D11 view of the D3D9 shared texture.
+
+  public:
+    /**
+     * @brief Initialize Dx9Vid capture and shared-texture pickup.
      *
      * @param config Configuration values to apply.
      * @param display_name Display name.

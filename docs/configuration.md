@@ -2256,6 +2256,12 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             with NVIDIA drivers; on GeForce it needs the unlock key (see NVFBC_PRIV_DATA in the windows-legacy docs).
             @note{Applies to Windows only on the windows-legacy branch; the Linux NvFBC entry above is separate.}</td>
     </tr>
+    <tr>
+        <td>nvfbc-dx9</td>
+        <td>Experimental zero-copy variant of NvFBC: captures into D3D9 shared textures picked up directly by the
+            encoder device, with no system-memory round-trip. Same OS/driver/key requirements as nvfbc.
+            @note{Applies to Windows only on the windows-legacy branch.}</td>
+    </tr>
 </table>
 
 ### encoder

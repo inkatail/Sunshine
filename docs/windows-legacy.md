@@ -47,6 +47,13 @@ Windows implementation:
   shared `IsCurrent()` loop, ARGB crop into software images).
 - `display_nvfbc_vram_t` in `display_vram.cpp`: same capture, uploaded via a
   D3D11 staging texture into the shared encoder texture for NVENC.
+- `nvfbc-dx9` (experimental, explicit opt-in): `nvfbc_dx9_capture_t` uses the
+  Dx9Vid target (`NVFBC_TO_DX9_VID`) with client D3D9Ex shared textures
+  (render-target usage, plain-texture fallback) matched to the display's
+  monitor, opened on the D3D11 side with the legacy `OpenSharedResource`.
+  `display_nvfbc_dx9_vram_t` then needs a single GPU-side `CopyResource` per
+  frame — no system memory involved. Not in the autodetect order until
+  validated on hardware; select with `capture=nvfbc-dx9`.
 - Optimizations ported from the DXGI backends: diff-map damage detection
   (`bDiffMap`, default 128x128 blocks, graceful fallback when refused) skips
   the copy and encode on static screens exactly like DXGI's

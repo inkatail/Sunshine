@@ -80,6 +80,7 @@ const config = ref(props.config)
           <template #windows>
             <option value="ddx">Desktop Duplication API</option>
             <option value="nvfbc">NVIDIA Framebuffer Capture</option>
+            <option value="nvfbc-dx9">NVIDIA Framebuffer Capture (D3D9 zero-copy, experimental)</option>
             <option value="wgc">Windows.Graphics.Capture {{ $t('_common.beta') }}</option>
           </template>
         </PlatformLayout>
