@@ -375,6 +375,7 @@ namespace platf::dxgi {
     diffmap_storage = nullptr;
     frame_bytes = nullptr;
     diffmap_active = false;
+    first_grab_pending = true;
     initialized = false;
     return capture_e::ok;
   }
@@ -442,14 +443,16 @@ namespace platf::dxgi {
       return status;
     }
 
-    // NvFBC reports the full desktop; bail to reinit on mode changes.
-    if ((int) session.frame_width() < width || (int) session.frame_height() < height) {
+    // NvFBC reports the full desktop; bail to reinit on any mode change,
+    // larger or smaller.
+    if ((int) session.frame_width() != width || (int) session.frame_height() != height) {
       BOOST_LOG(info) << "NvFBC frame size changed; reinitializing capture"sv;
       return capture_e::reinit;
     }
 
     // Static screen: skip the copy and encode like the DXGI update-flag path.
-    if (!session.frame_has_changes()) {
+    // The first frame is always copied (initial diff-map state is untrusted).
+    if (!session.claim_first_grab() && !session.frame_has_changes()) {
       return capture_e::timeout;
     }
 

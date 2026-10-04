@@ -962,6 +962,21 @@ namespace platf::dxgi {
       return false;
     }
 
+    /**
+     * @brief Claim the first-grab full copy.
+     *
+     * @details The first diff-map after setup cannot be trusted to be dirty
+     * on every driver, so the first frame is always copied.
+     * @return True once per session for the first grabbed frame.
+     */
+    bool claim_first_grab() {
+      if (first_grab_pending) {
+        first_grab_pending = false;
+        return true;
+      }
+      return false;
+    }
+
   private:
     void *session = nullptr;  ///< NvFBC ToSys interface object from CreateEx.
     void *buffer_storage = nullptr;  ///< Driver-owned frame buffer from ToSys setup.
@@ -971,6 +986,7 @@ namespace platf::dxgi {
     unsigned int last_width = 0;  ///< Desktop width from the last grab.
     unsigned int last_height = 0;  ///< Desktop height from the last grab.
     bool diffmap_active = false;  ///< Diff-map damage detection negotiated.
+    bool first_grab_pending = true;  ///< First grabbed frame still needs a full copy.
     bool initialized = false;  ///< Session is active.
   };
 

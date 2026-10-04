@@ -2271,6 +2271,9 @@ namespace platf::dxgi {
           }
         }
       }
+      if (!matched) {
+        BOOST_LOG(debug) << "NvFBC: no NVIDIA DXGI adapter matched ["sv << display_name << "]; using default D3D11 device"sv;
+      }
     }
 
     // Plain capture device (no VIDEO_SUPPORT needed here); the retry helper
@@ -2325,9 +2328,15 @@ namespace platf::dxgi {
       return status;
     }
 
-    if ((int) session.frame_width() < width || (int) session.frame_height() < height) {
+    if ((int) session.frame_width() != width || (int) session.frame_height() != height) {
       BOOST_LOG(info) << "NvFBC frame size changed; reinitializing capture"sv;
       return capture_e::reinit;
+    }
+
+    // Static screen: skip the upload and encode like the DXGI update-flag path.
+    // The first frame is always copied (initial diff-map state is untrusted).
+    if (!session.claim_first_grab() && !session.frame_has_changes()) {
+      return capture_e::timeout;
     }
 
     // Static screen: skip the upload and encode like the DXGI update-flag path.

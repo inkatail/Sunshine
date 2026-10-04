@@ -50,9 +50,13 @@ Windows implementation:
 - Optimizations ported from the DXGI backends: diff-map damage detection
   (`bDiffMap`, default 128x128 blocks, graceful fallback when refused) skips
   the copy and encode on static screens exactly like DXGI's
-  `AccumulatedFrames` check; `syncThreadDesktop()` in both inits so service
-  (session 0) launches capture the user desktop; adapter-ordinal retry
-  against the default adapter; throttled DRM warnings.
+  `AccumulatedFrames` check; the first frame is always copied (initial map
+  state is untrusted); any size change (larger or smaller) reinitializes;
+  `syncThreadDesktop()` in both inits so service (session 0) launches capture
+  the user desktop; adapter-ordinal retry against the default adapter;
+  throttled DRM warnings. Deliberately not done: partial-block copies and
+  finer diff blocks (no win for full-motion game content — DXGI copies full
+  frames too), contiguous-buffer fast paths (negligible vs the 8 MB copy).
 - Known limitations (not defects, documented): the HW cursor is composited by
   the driver, so it is always visible even when the client hides it
   (GameStream behaved the same); multi-monitor crop assumes the NvFBC buffer
