@@ -11,6 +11,13 @@
 #   (ZIP packaging: cpack -G ZIP; NSIS/WiX need Windows hosts.)
 set -euo pipefail
 
+# windows-legacy: never run this script as root. makepkg/paru refuse root builds;
+# privilege escalation happens per-command via sudo inside the script.
+if [ "${EUID:-$(id -u)}" -eq 0 ]; then
+  echo "Do not run $0 as root (e.g. not via 'sudo $0'). Run it as your user; it calls sudo itself." >&2
+  exit 1
+fi
+
 MINGW_PREFIX="${MINGW_PREFIX:-/usr/x86_64-w64-mingw32}"
 JOBS="${JOBS:-$(nproc)}"
 
@@ -25,9 +32,13 @@ sudo pacman -S --needed --noconfirm \
 
 # 2. Cross libraries from AUR (paru). Qt is skipped: legacy builds use TRAY=OFF.
 #    WGC is OFF too, so no cppwinrt sysroot package is needed.
+#    NOTE: mingw-w64-pkg-config goes first on its own line. Two AUR packages
+#    provide that virtual name (mingw-w64-pkg-config, llvm-mingw-w64-pkg-config)
+#    and paru asks interactively which provider to use; installing the real one
+#    explicitly first removes the prompt for everything that follows.
 msg "Installing AUR cross libraries (this builds Boost, it takes a while)..."
+paru -S --needed --noconfirm mingw-w64-pkg-config
 paru -S --needed --noconfirm \
-  mingw-w64-pkg-config \
   mingw-w64-zlib \
   mingw-w64-openssl \
   mingw-w64-boost \
