@@ -546,6 +546,7 @@ namespace pipewire {
      */
     static bool use_pipewire_pts(const compositor_version_t &compositor, const std::string &selected_display_name) {
       // KWin: use Pipewire pts metadata for versions 6.7.80+ (6.8 beta) or newer.
+      // Fork: also treat custom KWin 6.7.5 build as newer (backported pacing fix).
       // Mutter: use Pipewire pts metadata for Mutter 51 onwards, but pts is reliable only for virtual monitors (Meta-).
       // All other cases: don't use Pipewire pts metadata directly.
 
@@ -559,7 +560,7 @@ namespace pipewire {
           use_pts = (using_virtual_monitor && compositor.version[0] >= 51);
           break;
         case kwin:
-          use_pts = (compositor.version[0] > 6 || (compositor.version[0] == 6 && (compositor.version[1] > 7 || (compositor.version[1] == 7 && compositor.version[2] > 79))));
+          use_pts = (compositor.version[0] > 6 || (compositor.version[0] == 6 && (compositor.version[1] > 7 || (compositor.version[1] == 7 && compositor.version[2] >= 5))));
           break;
         default:
           break;
@@ -578,7 +579,8 @@ namespace pipewire {
      */
     static bool
       use_variable_rate(const compositor_version_t &compositor) {
-      // If the active compositor is KWin, request variable rate (0, 1) capture for versions 5.x-6.7.79 (up to 6.7 stable series).
+      // If the active compositor is KWin, request variable rate (0, 1) capture for versions 5.x-6.7.4 (up to 6.7 stable series).
+      // Fork: custom KWin 6.7.5 build is treated like 6.7.80+ (6.8 beta) since it backports the pacing fix.
       // Issue: KWin <=6.7 has a ~3% fixed-rate pacing deficit vs the requested framerate; variable rate avoids this and prioritizes gaming smoothness.
       //        KWin 6.7 regresses variable rate (desktop animations run at half speed, but doesn't affect in-game pacing). Ref: https://bugs.kde.org/show_bug.cgi?id=524129
       // Issue: KWin 6.8 still has desktop animation pacing issues with variable rate, but fixes the 3% fixed-rate pacing deficit. Fixed-rate pacing has
@@ -591,7 +593,7 @@ namespace pipewire {
 
       using enum compositor_type_e;
       if (compositor.type == kwin) {
-        variable_rate = (compositor.version[0] == 5 || (compositor.version[0] == 6 && (compositor.version[1] < 7 || (compositor.version[1] == 7 && compositor.version[2] < 80))));
+        variable_rate = (compositor.version[0] == 5 || (compositor.version[0] == 6 && (compositor.version[1] < 7 || (compositor.version[1] == 7 && compositor.version[2] < 5))));
       }
 
       return variable_rate;
